@@ -1,0 +1,3 @@
+<?php
+
+define( 'MAX_SUPPORTED_FILEPATH_LENGTH', 3072 );
