@@ -128,7 +128,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 				break;
 			case 'string':
 				if ( $last_pk !== null ) {
-					$where = $primary_key_identifier . ' > ' . ZS_Sync_Mysql_Helper::quote_string( $last_pk );
+					$where = $primary_key_identifier . ' > ' . ZS_Sync_Mysql_Helper::expression_for_string( $last_pk );
 				}
 				break;
 			default:

@@ -132,8 +132,21 @@ class ZS_Sync_Mysql_Helper {
 		return "`{$quoted_name}`";
 	}
 
-	public static function quote_string(string $string) {
-		global $wpdb;
-		return '"' . mysqli_real_escape_string($wpdb->dbh, $string) . '"';
+	/**
+	 * Transforms a string to a MySQL expression that can be safely
+	 * concatenated with the rest of the query.
+	 * 
+	 * Instead of attempting to backslash the string, it encodes it
+	 * as hex and wraps it in UNHEX() MySQL function.
+	 * 
+	 * Adding actual backslashes to the string is an incredibly complex
+	 * task because we don't know the input encoding. If it's a multibyte
+	 * encoding where the second byte of some characters is hex 22, that's
+	 * the same as ASCII double quote ("). A naive escaper would corrupt
+	 * the data by inserting a backslash in the middle of the multibyte
+	 * sequence right before the byte 22.
+	 */
+	public static function expression_for_string(string $string) {
+		return 'UNHEX("' . bin2hex($string) . '")';
 	}
 }
