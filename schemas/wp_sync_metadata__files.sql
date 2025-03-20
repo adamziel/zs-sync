@@ -12,12 +12,6 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__files (
     file_path VARBINARY(3072) NOT NULL PRIMARY KEY,
 
     /*
-     * Leave the top bit reserved for signed integers on 32bit
-     * systems (specifically, SQLite).
-     */
-    version_id BIGINT NOT NULL,
-
-    /*
      * Refers to the most-recent time that this resource was
      * scanned to check for the probability that it’s stale.
      */
