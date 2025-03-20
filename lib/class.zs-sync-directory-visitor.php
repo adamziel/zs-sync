@@ -1,7 +1,7 @@
 <?php
 
 class ZS_Sync_Directory_Visitor {
-	
+
 	private $stack_of_open_directories = array();
 	private $current_path;
 	private $root;
@@ -16,8 +16,10 @@ class ZS_Sync_Directory_Visitor {
 				),
 				'1.0.0'
 			);
+
 			return false;
 		}
+
 		return new self( $root );
 	}
 
@@ -42,7 +44,7 @@ class ZS_Sync_Directory_Visitor {
 				 * This is a depth-first traversal. If we just found a directory, we need to
 				 * open it and walk its contents on the next next_path() call.
 				 */
-				if ( is_dir( $this->current_path) ) {
+				if ( is_dir( $this->current_path ) ) {
 					$this->stack_of_open_directories[] = array( $this->current_path, opendir( $this->current_path ) );
 				}
 
@@ -50,18 +52,20 @@ class ZS_Sync_Directory_Visitor {
 			}
 			closedir( $dir );
 			array_pop( $this->stack_of_open_directories );
-
 		}
+
 		return false;
 	}
 
 	public function get_absolute_path() {
 		return $this->current_path;
 	}
+
 	public function get_relative_path() {
 		$root_with_slash = $this->root . '/';
-		$root_length = strlen($root_with_slash);
-		return substr($this->current_path, $root_length);
+		$root_length     = strlen( $root_with_slash );
+
+		return substr( $this->current_path, $root_length );
 	}
 
 	public function seek_to_closest_matching_prefix( string $sought_relative_path ) {
@@ -79,12 +83,19 @@ class ZS_Sync_Directory_Visitor {
 			}
 			$sought_relative_path = dirname( $sought_relative_path );
 			if ( ! $sought_relative_path || $sought_relative_path === '.' || $sought_relative_path === '/' ) {
-				return false; 
+				return false;
 			}
 		}
 
+		$subPathSegments = wp_path_segments( $sought_relative_path );
+		if ( ! $this->seek_to_entry(
+			$this->stack_of_open_directories[0][1],
+			$subPathSegments[0]
+		) ) {
+			return false;
+		}
+
 		$path_at_stack_top = $this->root;
-		$subPathSegments   = wp_path_segments( $sought_relative_path );
 		for ( $i = 0; $i < count( $subPathSegments ) - 1; $i ++ ) {
 			$path_at_stack_top .= '/' . $subPathSegments[ $i ];
 			if ( ! is_dir( $path_at_stack_top ) ) {
@@ -96,15 +107,17 @@ class ZS_Sync_Directory_Visitor {
 			 * desired entry, but it simplifies the traversing logic so let's
 			 * do it until it becomes the bottleneck.
 			 */
-			$dirhandle = opendir( $path_at_stack_top );
+			$dirhandle    = opendir( $path_at_stack_top );
 			$next_segment = $subPathSegments[ $i + 1 ];
 			$this->seek_to_entry( $dirhandle, $next_segment );
 			$this->stack_of_open_directories[] = array( $path_at_stack_top, $dirhandle );
 		}
 		$this->current_path = $sought_absolute_path;
-		if(is_dir($sought_absolute_path)) {
+		if ( is_dir( $sought_absolute_path ) ) {
 			$this->stack_of_open_directories[] = array( $sought_absolute_path, opendir( $sought_absolute_path ) );
 		}
+		$this->next_path();
+
 		return true;
 	}
 
@@ -114,6 +127,8 @@ class ZS_Sync_Directory_Visitor {
 				return true;
 			}
 		}
+
+		return false;
 	}
 
 	public function reset() {
@@ -123,7 +138,7 @@ class ZS_Sync_Directory_Visitor {
 		$this->stack_of_open_directories = array(
 			array( $this->root, opendir( $this->root ) ),
 		);
-		$this->current_path = $this->root;
+		$this->current_path              = $this->root;
 	}
 
 }

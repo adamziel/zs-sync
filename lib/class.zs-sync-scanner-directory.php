@@ -75,6 +75,9 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 			$processed ++;
 		}
 		$this->cursor['last_path'] = $this->visitor->get_relative_path();
+		if ( 0 === count( $this->indexed_paths ) ) {
+			return false;
+		}
 
 		// Upsert the hash information to the sync metadata table
 
@@ -125,8 +128,8 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 
 			return false;
 		}
-		$this->visitor = $visitor;
 
+		$this->visitor = $visitor;
 		if ( $this->cursor && ! empty( $this->cursor['last_path'] ) ) {
 			if ( ! $this->visitor->seek_to_closest_matching_prefix( $this->cursor['last_path'] ) ) {
 				error_log( "Failed to seek to last scanned path: " . $this->cursor['last_path'] );
