@@ -131,4 +131,9 @@ class ZS_Sync_Mysql_Helper {
 		$quoted_name = str_replace( '`', '``', $name );
 		return "`{$quoted_name}`";
 	}
+
+	public static function quote_string(string $string) {
+		global $wpdb;
+		return '"' . mysqli_real_escape_string($wpdb->dbh, $string) . '"';
+	}
 }
