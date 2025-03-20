@@ -105,10 +105,10 @@ class ZS_Sync_Table_Info {
 			$column_expressions = [];
 			foreach ( $this->fields as $field ) {
 				$escaped_field = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $field->Field );
-				$column_expressions[] = "COALESCE(" . $escaped_field . ", 'NULL')";
+				$column_expressions[] = $escaped_field;
 			}
 
-			$this->hash_expressions = "CRC32(CONCAT_WS('#', " . implode(', ', $column_expressions) . "))";
+			$this->hash_expressions = "CRC32(JSON_ARRAY(" . implode(', ', $column_expressions) . "))";
 		}
 
 		return $this->hash_expressions;
