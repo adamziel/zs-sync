@@ -28,9 +28,9 @@ class ZS_Sync_Table_Scanner {
      * Moves to the next table automatically when done.
      * Returns true if there's more data to process, false when completed.
      */
-    public function index_next(): bool
+    public function next_chunk(): bool
     {
-        if(!$this->initialize()) {
+        if(!$this->initialize_scanner()) {
             return false;
         }
         while(true) {
@@ -46,7 +46,7 @@ class ZS_Sync_Table_Scanner {
         }
     }
 
-    private function initialize(): bool
+    private function initialize_scanner(): bool
     {
         if ($this->tables !== null) {
             return true;
@@ -61,7 +61,7 @@ class ZS_Sync_Table_Scanner {
 
 		$table_name = $this->tables[0];
 		while(true) {
-			if($this->initialize_table($table_name)) {
+			if($this->initialize_table_metadata($table_name)) {
 				break;
 			}
 			if(!$this->next_table()) {
@@ -70,69 +70,6 @@ class ZS_Sync_Table_Scanner {
 			$table_name = $this->cursor['table_name'];
 		}
 
-        return true;
-    }
-
-    private function next_table(): bool
-    {
-        $table_index = array_search($this->cursor['table_name'], $this->tables);
-        if(false === $table_index) {
-            $table_index = -1;
-        }
-
-        while(true) {
-            $table_index++;
-
-            if ($table_index >= count($this->tables) - 1) {
-                // We've already processed all the tables
-                return false;
-            }
-
-			if(!$this->initialize_table($this->tables[$table_index])) {
-				continue;
-			}
-
-            break;
-        }
-
-        return true;
-    }
-
-    private function initialize_table($table_name)
-    {
-		if (in_array($table_name, $this->excludeTables)) {
-			return false;
-		}
-		$this->cursor = array(
-			'table_name' => $table_name,
-			'last_pk' => null,
-		);
-
-        $this->table_info = ZS_Sync_Table_Info::for($table_name);
-        if($this->table_info === null) {
-            return false;
-        }
-
-        switch($this->table_info->get_primary_key_php_type()) {
-			case 'int':
-				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-					'wp_sync_metadata__bigint_key'
-				);
-				break;
-			case 'string':
-				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-					'wp_sync_metadata__blob_key'
-				);
-				break;
-			default:
-				_doing_it_wrong(
-					__METHOD__,
-					"Skipping table " . $this->cursor['table_name'] . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
-					ZS_SYNC_VERSION
-				);
-				$this->next_table();
-				return false;
-        }
         return true;
     }
 
@@ -239,15 +176,78 @@ class ZS_Sync_Table_Scanner {
             ...$bound_params
         );
 
-        echo $sql;
         if(false === $wpdb->query($sql)) {
             // @todo Check the error?
-            throw new Exception("Failed to index next records chunk: " . $wpdb->last_error);
+            error_log("Failed to index next records chunk: " . $wpdb->last_error);
+			return false;
         }
 
         $this->cursor['last_pk'] = $wpdb->get_var("SELECT @last_processed_pk");
 
         return $this->cursor['last_pk'] !== null;
+    }
+
+    private function next_table(): bool
+    {
+        $table_index = array_search($this->cursor['table_name'], $this->tables);
+        if(false === $table_index) {
+            $table_index = -1;
+        }
+
+        while(true) {
+            $table_index++;
+
+            if ($table_index >= count($this->tables) - 1) {
+                // We've already processed all the tables
+                return false;
+            }
+
+			if(!$this->initialize_table_metadata($this->tables[$table_index])) {
+				continue;
+			}
+
+            break;
+        }
+
+        return true;
+    }
+
+    private function initialize_table_metadata($table_name)
+    {
+		if (in_array($table_name, $this->excludeTables)) {
+			return false;
+		}
+		$this->cursor = array(
+			'table_name' => $table_name,
+			'last_pk' => null,
+		);
+
+        $this->table_info = ZS_Sync_Table_Info::for($table_name);
+        if($this->table_info === null) {
+            return false;
+        }
+
+        switch($this->table_info->get_primary_key_php_type()) {
+			case 'int':
+				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
+					'wp_sync_metadata__bigint_key'
+				);
+				break;
+			case 'string':
+				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
+					'wp_sync_metadata__blob_key'
+				);
+				break;
+			default:
+				_doing_it_wrong(
+					__METHOD__,
+					"Skipping table " . $this->cursor['table_name'] . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
+					ZS_SYNC_VERSION
+				);
+				$this->next_table();
+				return false;
+        }
+        return true;
     }
 
     /**
