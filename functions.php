@@ -20,8 +20,8 @@ if ( ! defined( 'ZS_SYNC_VERSION' ) ) {
 //require_once __DIR__ . '/lib/providers/class.zs-sync-provider-core-post.php';
 //require_once __DIR__ . '/lib/providers/register-providers.php';
 
-// require_once __DIR__ . '/lib/directory-scanner.php';
-// require_once __DIR__ . '/lib/class.zs-sync-table-scanner.php';
+// require_once __DIR__ . '/lib/class.zs-sync-scanner-directory.php';
+// require_once __DIR__ . '/lib/class.zs-sync-scanner-table.php';
 
 function init() {
 //	$registry = new ZS_Sync_Request_Registry();
