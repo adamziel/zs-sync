@@ -34,10 +34,44 @@ class ZS_Sync_Table_Info {
 		}
 
 		if ( ! isset( $column_info[ $table_name ] ) ) {
-			$wpdb->get_results( "SHOW COLUMNS FROM {$escaped_table_name};" );
+			$columns = $wpdb->get_results( "SHOW COLUMNS FROM {$escaped_table_name};" );
+			if ( null === $columns ) {
+				// @todo Check the error?
+				$column_info[ $table_name ] = false;
+				return null;
+			}
+
+			$fields       = array();
+			$primary_keys = array();
+
+			foreach ( $columns as $column ) {
+				$name            = $column->Field;
+				$fields[ $name ] = $column;
+				if ( 'PRI' === $column->Key ) {
+					$primary_keys[] = $name;
+				}
+			}
+
+			// Only tables with a single primary key are supported.
+			if ( empty( $primary_keys ) || count( $primary_keys ) > 1 ) {
+				$column_info[ $table_name ] = false;
+				return null;
+			}
+
+			// @todo Create a record class for this.
+			$column_info[ $table_name ] = (object) array(
+				'fields'           => $fields,
+				'primary_key'      => $primary_keys[0],
+			);
 		}
 
-		return null;
+		$columns = $column_info[ $table_name ];
+		if ( false === $columns ) {
+			return null;
+		}
+
+		// @todo this class should have something like ->build_hash_for( $primary_key ).
+		return $columns;
 	}
 
 	/**
