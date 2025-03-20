@@ -133,7 +133,6 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 		if ( $this->cursor && ! empty( $this->cursor['last_path'] ) ) {
 			if ( ! $this->visitor->seek_to_closest_matching_prefix( $this->cursor['last_path'] ) ) {
 				error_log( "Failed to seek to last scanned path: " . $this->cursor['last_path'] );
-
 				return false;
 			}
 		}

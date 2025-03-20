@@ -96,7 +96,7 @@ class ZS_Sync_Table_Info {
 			case 'double':
 				return 'float';
 			default:
-				return 'unknown (' . $type . ')';
+				return 'unknown (' . $this->fields[$this->primary_key_name]->Type . ')';
 		}
 	}
 
