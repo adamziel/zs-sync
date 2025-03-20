@@ -61,6 +61,7 @@ class Mysql_Schema_Object_Name_Escaping_Test extends WP_UnitTestCase {
 			'NUL bytes'                       => array( "wp_posts\x00wp_users", null ),
 			'Supplementary Plane characters'  => array( "\u{1f170}BC", null ),
 			'Non-UTF8 characters'             => array( "t\xE9st", null ),
+			'Ends with a space'               => array( 'beans ', null ),
 		);
 	}
 }

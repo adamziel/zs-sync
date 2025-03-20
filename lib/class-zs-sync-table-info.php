@@ -23,13 +23,13 @@ class ZS_Sync_Table_Info {
 
 		static $column_info = array();
 
-		$should_sync = apply_filters( 'wp_sync_should_sync_table', true, $table_name );
-		if ( true !== $should_sync ) {
+		$escaped_table_name = self::schema_object_name_for_query( $table_name );
+		if ( ! isset( $escaped_table_name ) ) {
 			return null;
 		}
 
-		$escaped_table_name = self::schema_object_name_for_query( $table_name );
-		if ( ! isset( $escaped_table_name ) ) {
+		$should_sync = apply_filters( 'wp_sync_should_sync_table', true, $table_name );
+		if ( true !== $should_sync ) {
 			return null;
 		}
 
@@ -49,7 +49,7 @@ class ZS_Sync_Table_Info {
 	 *     'test'    === ZS_Sync_Table_Info::schema_object_name_for_query( 'test' );
 	 *     'te$st'   === ZS_Sync_Table_Info::schema_object_name_for_query( 'te$st' );
 	 *     '9dogs'   === ZS_Sync_Table_Info::schema_object_name_for_query( '9dogs' );
-	 *     '☂'      === ZS_Sync_Table_Info::schema_object_name_for_query( "\u{2602}" );
+	 *     '☂'       === ZS_Sync_Table_Info::schema_object_name_for_query( "\u{2602}" );
 	 *
 	 *     '`%`'     === ZS_Sync_Table_Info::schema_object_name_for_query( '%' );
 	 *     '````     === ZS_Sync_Table_Info::schema_object_name_for_query( '`' );
