@@ -4,9 +4,9 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__bigint_key (
 
     /*
      * All of WordPress’ default tables have BIGINT primary keys.
-     * For string primary keys, see `wp_sync_metadata__string_key`.
+     * For string primary keys, see `wp_sync_metadata__blob_key`.
      */
-    primary_key BIGINT NOT NULL PRIMARY KEY,
+    primary_key BIGINT NOT NULL,
 
     /*
      * Leave the top bit reserved for signed integers on 32bit
@@ -25,5 +25,12 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__bigint_key (
      * then expand as necessary. Because INT is signed, however,
      * this field is a BIGINT.
     */
-    hash_value INT UNSIGNED
+    hash_value INT UNSIGNED,
+
+	/**
+	 * Records are uniquely identified by their source of origin – in
+	 * this case it's the combination of their table name and their
+	 * numerical primary key.
+	 */
+	PRIMARY KEY (`table_name`, `primary_key`)
 );
