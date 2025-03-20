@@ -6,6 +6,7 @@ class ZS_Sync_Table_Scanner {
     private array $excludeTables;
     private ?array $tables = null;
     private ?object $table_info = null;
+    private ?string $sync_metadata_table_identifier = null;
     private ?array $cursor = null;
 
     /**
@@ -58,26 +59,16 @@ class ZS_Sync_Table_Scanner {
             return false;
         }
 
-        if (!$this->cursor) {
-            // Move to the first non-excluded table
-            foreach ($this->tables as $t) {
-                if (!in_array($t, $this->excludeTables, true)) {
-                    $this->cursor = [
-                     'table_name' => $t,
-                     'last_pk' => null,
-                    ];
-                    break;
-                }
-            }
-            // If everything was excluded, cursor stays null
-            if (!$this->cursor) {
-                $this->cursor = ['table_name' => null, 'last_pk' => null];
-            }
-        }
-
-        if ($this->cursor['table_name']) {
-            return $this->initialize_table();
-        }
+		$table_name = $this->tables[0];
+		while(true) {
+			if($this->initialize_table($table_name)) {
+				break;
+			}
+			if(!$this->next_table()) {
+				return false;
+			}
+			$table_name = $this->cursor['table_name'];
+		}
 
         return true;
     }
@@ -97,28 +88,52 @@ class ZS_Sync_Table_Scanner {
                 return false;
             }
 
-            $table_name = $this->tables[$table_index];
-            if (in_array($table_name, $this->excludeTables)) {
-                continue;
-            }
+			if(!$this->initialize_table($this->tables[$table_index])) {
+				continue;
+			}
 
             break;
         }
 
-        $this->cursor = array(
-        'table_name' => $table_name,
-        'last_pk' => null,
-        );
-        $this->initialize_table();
         return true;
     }
 
-    private function initialize_table()
+    private function initialize_table($table_name)
     {
-        $this->table_info = ZS_Sync_Table_Info::for(
-            $this->cursor['table_name']
-        );
-        return $this->table_info !== false;
+		if (in_array($table_name, $this->excludeTables)) {
+			return false;
+		}
+		$this->cursor = array(
+			'table_name' => $table_name,
+			'last_pk' => null,
+		);
+
+        $this->table_info = ZS_Sync_Table_Info::for($table_name);
+        if($this->table_info === null) {
+            return false;
+        }
+
+        switch($this->table_info->get_primary_key_php_type()) {
+			case 'int':
+				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
+					'wp_sync_metadata__bigint_key'
+				);
+				break;
+			case 'string':
+				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
+					'wp_sync_metadata__blob_key'
+				);
+				break;
+			default:
+				_doing_it_wrong(
+					__METHOD__,
+					"Skipping table " . $this->cursor['table_name'] . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
+					ZS_SYNC_VERSION
+				);
+				$this->next_table();
+				return false;
+        }
+        return true;
     }
 
     /**
@@ -148,28 +163,26 @@ class ZS_Sync_Table_Scanner {
         $bound_params = array($table_name);
         $where = '1 = 1';
         switch($this->table_info->get_primary_key_php_type()) {
-        case 'int':
-            $sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-                'wp_sync_metadata__bigint_key'
-            );
-            if ($last_pk !== null) {
-                $where = $wpdb->prepare("$primary_key_identifier > %d", $last_pk);
-                $bound_params[] = (int)$last_pk;
-            }
-            break;
-        case 'string':
-            $sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-                'wp_sync_metadata__blob_key'
-            );
-            if ($last_pk !== null) {
-                $where = $wpdb->prepare("$primary_key_identifier > %s", $last_pk);
-                $bound_params[] = $last_pk;
-            }
-            break;
-        default:
-            throw new Exception("Unexpected primary key type: " . $this->table_info->get_primary_key_php_type());
+			case 'int':
+				if ($last_pk !== null) {
+					$where = "$primary_key_identifier > " . (int)$last_pk;
+				}
+				break;
+			case 'string':
+				if ($last_pk !== null) {
+					$where = $primary_key_identifier . ' > "' . mysqli_real_escape_string($wpdb->dbh, $last_pk) . '"';
+				}
+				break;
+			default:
+				_doing_it_wrong(
+					__METHOD__,
+					"Skipping table " . $table_name . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
+					ZS_SYNC_VERSION
+				);
+				return false;
         }
-        $table_name_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query($table_name);
+		$sync_metadata_table_identifier = $this->sync_metadata_table_identifier;
+        $scanned_table_name_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query($table_name);
         $chunk_size_number = (int)$this->chunkSize;
 
         /**
@@ -178,7 +191,15 @@ class ZS_Sync_Table_Scanner {
          * We assign the primary key value to this variable in each row expression,
          * and we process rows in a sorted order. At the end of the processing,
          * the variable contains the most recently seen primary key value.
-         * 
+		 * 
+		 * Also, for version bumps, we are assigning a range of values from
+		 * MAX(version_id) + 1 to MAX(version_id) + inserted/updated rows. There
+		 * are no uniqueness guarantees. A concurrent update coming from a WordPress
+		 * hook could assign a version_id that overlaps with our range. Similarly,
+		 * two concurrent hooks could assign the same bumped version_id.
+		 * 
+		 * That's why the synchronization logic is not relying on unique version_ids.
+         *
          * MySQL doesn't support the RETURNING keyword from Postgres so we're
          * simulating it with the MySQL tools that we have at our disposal.
          * 
@@ -195,14 +216,12 @@ class ZS_Sync_Table_Scanner {
             )
             SELECT
                 %s,
-                (
-                    SELECT @last_processed_pk := t.$primary_key_identifier
-                ),
-                (
-                    SELECT COALESCE( MAX( version_id ), 0 ) + 1 as next FROM {$sync_metadata_table_identifier}
-                ),
+                (SELECT @last_processed_pk := scanned.$primary_key_identifier),
+                @next_version_id := @next_version_id + 1,
                 $hash_expression
-            FROM $table_name_identifier t
+            FROM
+				$scanned_table_name_identifier scanned,
+				(SELECT @next_version_id := COALESCE( MAX( version_id ), 0 ) as next FROM {$sync_metadata_table_identifier}) v
             WHERE $where
             ORDER BY $primary_key_identifier ASC
             LIMIT $chunk_size_number
@@ -220,7 +239,6 @@ class ZS_Sync_Table_Scanner {
             ...$bound_params
         );
 
-        $sql = $wpdb->prepare($sql, $bound_params);
         echo $sql;
         if(false === $wpdb->query($sql)) {
             // @todo Check the error?

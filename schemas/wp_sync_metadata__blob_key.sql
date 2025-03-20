@@ -23,8 +23,16 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__blob_key (
     primary_key VARBINARY(704) NOT NULL,
 
     /*
+	 * A global counter for row version.
+	 *
      * Leave the top bit reserved for signed integers on 32bit
      * systems (specifically, SQLite).
+	 *
+	 * Every detected update with bump that row's version_id to
+	 * MAX( version_id ) + 1. At the same time, there are no
+	 * uniqueness guarantees. The version_id will typically be
+	 * different for each row, but an occasional concurrent
+	 * update might assign the same version_number to two rows.
      */
     version_id BIGINT NOT NULL,
 
