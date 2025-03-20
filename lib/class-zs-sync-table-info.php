@@ -1,29 +1,17 @@
 <?php
 
 class ZS_Sync_Table_Info {
-	/**
-	 * Since object names are limited to 64 characters (except for
-	 * aliases and compound statement labels, which this code
-	 * overlooks), and since Supplementary Characters are not
-	 * permitted, the maximum length is 64 * 3 bytes, because
-	 * all Basic Multilingual Plane characters encode within
-	 * three bytes.
-	 *
-	 * @see https://dev.mysql.com/doc/refman/8.4/en/identifiers.html
-	 */
-	const MAX_OBJECT_NAME_BYTES = 192;
 
-	/**
-	 * @see https://dev.mysql.com/doc/refman/8.4/en/identifiers.html
-	 */
-	const MAX_OBJECT_NAME_CHARS = 64;
+	private $fields;
+	private $primary_key_name;
+	private $hash_expressions;
 
-	public static function for( $table_name ): ?array {
+	public static function for( $table_name ): ?object {
 		global $wpdb;
 
 		static $column_info = array();
 
-		$escaped_table_name = self::schema_object_name_for_query( $table_name );
+		$escaped_table_name = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
 		if ( ! isset( $escaped_table_name ) ) {
 			return null;
 		}
@@ -70,121 +58,59 @@ class ZS_Sync_Table_Info {
 			return null;
 		}
 
-		// @todo this class should have something like ->build_hash_for( $primary_key ).
-		return $columns;
+		// @todo this class should have something like ->	( $primary_key ).
+		return new ZS_Sync_Table_Info( $columns->fields, $columns->primary_key );
 	}
 
-	/**
-	 * Returns a version of a schema object name safe for including in
-	 * a query, escaped if necessary, and `null`, if invalid.
-	 *
-	 * Example:
-	 *
-	 *     'test'    === ZS_Sync_Table_Info::schema_object_name_for_query( 'test' );
-	 *     'te$st'   === ZS_Sync_Table_Info::schema_object_name_for_query( 'te$st' );
-	 *     '9dogs'   === ZS_Sync_Table_Info::schema_object_name_for_query( '9dogs' );
-	 *     '☂'       === ZS_Sync_Table_Info::schema_object_name_for_query( "\u{2602}" );
-	 *
-	 *     '`%`'     === ZS_Sync_Table_Info::schema_object_name_for_query( '%' );
-	 *     '````     === ZS_Sync_Table_Info::schema_object_name_for_query( '`' );
-	 *     '`$test`' === ZS_Sync_Table_Info::schema_object_name_for_query( '$test' );
-	 *     '`1337`'  === ZS_Sync_Table_Info::schema_object_name_for_query( '1337' );
-	 *     '`a.b`'   === ZS_Sync_Table_Info::schema_object_name_for_query( 'a.b' );
-	 *
-	 *     // NUL bytes are not allowed.
-	 *     null === ZS_Sync_Table_Info::schema_object_name_for_query( "wp_posts\x00wp_users" );
-	 *
-	 *     // Supplementary characters are not allowed.
-	 *     null === ZS_Sync_Table_Info::schema_object_name_for_query( "be\u{1F170}" );
-	 *
-	 *     // Non-UTF8 encodings are not supported.
-	 *     null === ZS_Sync_Table_Info::schema_object_name_for_query( "t\xE9st" );
-	 *
-	 * @see https://dev.mysql.com/doc/refman/8.4/en/identifiers.html
-	 *
-	 * @param string $name
-	 * @return string|null
-	 */
-	public static function schema_object_name_for_query( string $name ): ?string {
-		/*
-		 * > Internally, identifiers are converted to and are stored as Unicode (UTF-8).
-		 *
-		 * It’s not worth trying to convert encodings. If the given name isn’t
-		 * already UTF-8 it isn’t supported by this plugin, even if it might
-		 * be theoretically possible to convert it into UTF-8.
-		 */
-		if ( ! mb_check_encoding( $name, 'UTF-8' ) ) {
-			return null;
+	public function __construct( $fields, $primary_key_name ) {
+		$this->fields = $fields;
+		$this->primary_key_name = $primary_key_name;
+	}
+
+	public function get_fields() {
+		return $this->fields;
+	}
+
+	public function get_primary_key_name() {
+		return $this->primary_key_name;
+	}
+
+	public function get_primary_key_php_type() {
+		$type = strtolower($this->fields[$this->primary_key_name]->Type);
+		if(str_contains($type, '(')) {
+			$type = substr($type, 0, strpos($type, '('));
+		}
+		if(str_contains($type, ' ')) {
+			$type = substr($type, 0, strpos($type, ' '));
+		}
+		switch($type) {
+			case 'char':
+			case 'varchar':
+			case 'text':
+				return 'string';
+			case 'int':
+			case 'bigint':
+			case 'mediumint':
+				return 'int';
+			case 'float':
+			case 'double':
+				return 'float';
+			default:
+				return 'unknown (' . $type . ')';
+		}
+	}
+
+	public function build_row_hash_expression() {
+		if(!$this->hash_expressions) {
+			$column_expressions = [];
+			foreach ( $this->fields as $field ) {
+				$escaped_field = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $field->Field );
+				$column_expressions[] = "COALESCE(" . $escaped_field . ", 'NULL')";
+			}
+
+			$this->hash_expressions = "CRC32(CONCAT_WS('#', " . implode(', ', $column_expressions) . "))";
 		}
 
-		$name_length = strlen( $name );
-		if (
-			0 === $name_length ||
-			$name_length > self::MAX_OBJECT_NAME_BYTES ||
-			mb_strlen( $name, 'UTF-8' ) > self::MAX_OBJECT_NAME_CHARS
-		) {
-			return null;
-		}
-
-		/*
-		 * > Database, table, and column names cannot
-		 * > end with space characters.
-		 */
-		if ( ' ' === $name[ $name_length - 1 ] ) {
-			return null;
-		}
-
-		$has_forbidden_characters = false;
-		$needs_quoting            = false;
-		$has_non_digits           = false;
-
-		/*
-		 * > Use of the dollar sign as the first character in the unquoted
-		 * > name of a database, table, view, column, stored program, or
-		 * > alias is deprecated, including such names used with qualifiers
-		 */
-		$needs_quoting |= '$' === $name[0];
-
-		/*
-		 * > ASCII NUL (U+0000) and supplementary characters
-		 * > (U+10000 and higher) are not permitted in
-		 * > quoted or unquoted identifiers.
-		 */
-		for ( $i = 0; $i < $name_length; $i++ ) {
-			$c = $name[ $i ];
-			$o = ord( $c );
-
-			/*
-			 * > Identifiers may begin with a digit but unless
-			 * > quoted may not consist solely of digits.
-			 */
-			$is_digit        = $c >= '0' && $c <= '9';
-			$has_non_digits |= ! $is_digit;
-
-			/*
-			 * > Permitted characters in unquoted identifiers:
-			 * >   - ASCII: [0-9,a-z,A-Z$_]
-			 * >   - Extended: U+0080 .. U+FFFF
-			 */
-			$needs_quoting |= ! (
-				( $c >= 'A' && $c <= 'Z' ) ||
-				( $c >= 'a' && $c <= 'z' ) ||
-				$is_digit || $c === '$' || $c === '_' ||
-				$o >= 0x80
-			);
-
-			$has_forbidden_characters |= ( 0 === $o ) || ( ( $o & 0xF8 ) === 0xF0 );
-		}
-
-		if ( $has_forbidden_characters ) {
-			return null;
-		}
-
-		if ( ! $needs_quoting && $has_non_digits ) {
-			return $name;
-		}
-
-		$quoted_name = str_replace( '`', '``', $name );
-		return "`{$quoted_name}`";
+		return $this->hash_expressions;
 	}
 }
