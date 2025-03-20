@@ -17,7 +17,7 @@ function zs_sync_scanner_directory_should_skip_table( $should_skip, $table_name 
 	return false;
 }
 
-class ZS_Sync_Scanner_Directory {
+class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 
 	private int $max_chunk_size;
 	private ?ZS_Sync_Directory_Visitor $visitor = null;
