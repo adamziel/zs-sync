@@ -1,5 +1,6 @@
 <?php
 
+
 function wp_sync_bump_version( $resource_kind, $primary_key ): bool {
 	global $wpdb;
 	static $column_names = array();
