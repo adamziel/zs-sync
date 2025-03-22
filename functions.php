@@ -10,6 +10,7 @@ if ( ! defined( 'ZS_SYNC_VERSION' ) ) {
 	define( 'ZS_SYNC_VERSION', '1.0.0' );
 }
 
+//require_once __DIR__ . '/register-cron.php';
 //require_once __DIR__ . '/lib/class.zs-sync-request-errors.php';
 //require_once __DIR__ . '/lib/class.zs-sync-resource-request.php';
 //require_once __DIR__ . '/lib/class.zs-sync-uri.php';
