@@ -3,14 +3,15 @@
 /**
  * Skip the system tables from scanning.
  */
-add_filter( 'zs_sync.should_skip_table', 'zs_sync_scanner_table_should_skip_table', 10, 2 );
+add_filter( 'wp_sync_should_sync_table', 'zs_sync_scanner_table_should_skip_table', 10, 2 );
 
 function zs_sync_scanner_table_should_skip_table( $should_skip, $table_name ) {
 	if ( $should_skip ) {
 		return $should_skip;
 	}
 
-	if ( $table_name === 'wp_sync_metadata__bigint_key' || $table_name === 'wp_sync_metadata__blob_key' ) {
+	// Skip all metadata tables
+	if ( strpos( $table_name, 'wp_sync_metadata__' ) === 0 ) {
 		return true;
 	}
 
@@ -103,93 +104,223 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 		global $wpdb;
 
 		$table_name = $this->cursor['table_name'];
-		if ( ! $table_name || ! $this->table_info || ! $this->table_info->get_primary_key_name() ) {
+		if ( ! $table_name || ! $this->table_info ) {
 			return false;
 		}
-		$last_pk = $this->cursor['last_pk'];
+		$table_name_string              = ZS_Sync_Mysql_Helper::string_to_safe_expression( $table_name );
+		$last_pk                        = $this->cursor['last_pk'];
+		$pk_type                        = $this->table_info->get_primary_key_type();
+		$hash_expression                = $this->table_info->build_row_hash_expression();
+		$sync_metadata_table_identifier = $this->sync_metadata_table_identifier;
+		$scanned_table_name_identifier  = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
+		$max_chunk_size_number          = (int) $this->max_chunk_size;
 
-		/**
-		 * We need to interpolate the values below – they cannot be provided
-		 * via prepared statements placeholders. Let's be extra careful with
-		 * them. Identifiers are escaped and numbers are explicitly cast into
-		 * the integer type before use.
-		 */
-		$primary_key_name       = $this->table_info->get_primary_key_name();
-		$primary_key_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_key_name );
-		$hash_expression        = $this->table_info->build_row_hash_expression();
+		$wpdb->query( "SET @last_processed_pk := null" );
+		$sql = "";
 
-		$bound_params = array( $table_name );
-		$where        = '1 = 1';
-		switch ( $this->table_info->get_primary_key_php_type() ) {
-			case 'int':
+		// Handle different primary key types
+		switch ( $pk_type ) {
+			case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BIGINT:
+				$primary_key_name       = $this->table_info->get_primary_keys()[0];
+				$primary_key_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_key_name );
+
+				$where = '1 = 1';
 				if ( $last_pk !== null ) {
 					$where = "$primary_key_identifier > " . (int) $last_pk;
 				}
-				break;
-			case 'string':
-				if ( $last_pk !== null ) {
-					$where = $primary_key_identifier . ' > ' . ZS_Sync_Mysql_Helper::expression_for_string( $last_pk );
+
+				$sql = "INSERT INTO {$sync_metadata_table_identifier} (
+						`table_name`, `primary_key`, `hash_value`
+					)
+					SELECT
+						$table_name_string, (SELECT @last_processed_pk := scanned.$primary_key_identifier), $hash_expression
+					FROM
+						$scanned_table_name_identifier scanned
+					WHERE $where
+					ORDER BY $primary_key_identifier ASC
+					LIMIT $max_chunk_size_number
+					ON DUPLICATE KEY UPDATE
+						hash_value = IF(
+							{$sync_metadata_table_identifier}.hash_value != VALUES(hash_value),
+							VALUES(hash_value),
+							{$sync_metadata_table_identifier}.hash_value
+						)";
+
+				$result = $wpdb->query( $sql );
+				if ( false === $result ) {
+					// @todo Check the error?
+					error_log( "Failed to index next records chunk: " . $wpdb->last_error );
+
+					return false;
 				}
+
+				$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
+				$this->cursor['last_pk'] = $last_processed_pk;
 				break;
+
+			case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BLOB:
+				$primary_key_name       = $this->table_info->get_primary_keys()[0];
+				$primary_key_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_key_name );
+
+				$where = '1 = 1';
+				if ( $last_pk !== null ) {
+					$where = $primary_key_identifier . ' > ' . ZS_Sync_Mysql_Helper::string_to_safe_expression( $last_pk );
+				}
+
+				$sql    = "INSERT INTO {$sync_metadata_table_identifier} (
+						`table_name`, `primary_key`, `hash_value`
+					)
+					SELECT
+						$table_name_string, (SELECT @last_processed_pk := scanned.$primary_key_identifier), $hash_expression
+					FROM
+						$scanned_table_name_identifier scanned
+					WHERE $where
+					ORDER BY $primary_key_identifier ASC
+					LIMIT $max_chunk_size_number
+					ON DUPLICATE KEY UPDATE
+						hash_value = IF(
+							{$sync_metadata_table_identifier}.hash_value != VALUES(hash_value),
+							VALUES(hash_value),
+							{$sync_metadata_table_identifier}.hash_value
+						)";
+				$result = $wpdb->query( $sql );
+
+				if ( false === $result ) {
+					// @todo Check the error?
+					error_log( "Failed to index next records chunk: " . $wpdb->last_error );
+
+					return false;
+				}
+
+				$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
+				$this->cursor['last_pk'] = $last_processed_pk;
+				break;
+
+			case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BIGINT_TWO_TUPLE:
+				$primary_keys     = $this->table_info->get_primary_keys();
+				$primary_key_head = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[0] );
+				$primary_key_tail = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[1] );
+
+				$where = '1 = 1';
+				if ( $last_pk !== null && is_array( $last_pk ) && isset( $last_pk[0] ) && isset( $last_pk[1] ) ) {
+					$where = "($primary_key_head, $primary_key_tail) > (" . (int) $last_pk[0] . ", " . (int) $last_pk[1] . ")";
+				}
+
+				$sql = "INSERT INTO {$sync_metadata_table_identifier} (
+						`table_name`, `primary_key_head`, `primary_key_tail`, `hash_value`
+					)
+					SELECT 
+						scanned__table_name,
+						scanned__primary_key_head,
+						scanned__primary_key_tail,
+						scanned__hash_value
+					FROM (
+						SELECT
+							$table_name_string AS scanned__table_name,
+							$primary_key_head AS scanned__primary_key_head,
+							$primary_key_tail AS scanned__primary_key_tail,
+							$hash_expression AS scanned__hash_value,
+							(SELECT @last_processed_pk := JSON_ARRAY(scanned.$primary_key_head, scanned.$primary_key_tail))
+						FROM
+							$scanned_table_name_identifier scanned
+						WHERE $where
+						ORDER BY $primary_key_head ASC, $primary_key_tail ASC
+						LIMIT $max_chunk_size_number
+					) AS sub
+					ON DUPLICATE KEY UPDATE
+						hash_value = IF(
+							{$sync_metadata_table_identifier}.hash_value != VALUES(hash_value),
+							VALUES(hash_value),
+							{$sync_metadata_table_identifier}.hash_value
+						)";
+
+				$result = $wpdb->query( $sql );
+
+				if ( false === $result ) {
+					// @todo Check the error?
+					error_log( "Failed to index next records chunk: " . $wpdb->last_error );
+
+					return false;
+				}
+
+				$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
+				$this->cursor['last_pk'] = $last_processed_pk !== null ? json_decode( $last_processed_pk, true ) : null;
+				break;
+
+			case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_COMPOSITE:
+				$primary_keys   = $this->table_info->get_primary_keys();
+				$pk_identifiers = array();
+				$pk_json_parts  = array();
+
+				foreach ( $primary_keys as $i => $key ) {
+					$pk_id            = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $key );
+					$pk_identifiers[] = $pk_id;
+					$pk_json_parts[]  = "$pk_id";
+				}
+
+				$where = '1 = 1';
+				if ( $last_pk !== null && is_array( $last_pk ) ) {
+					$primary_key_identifier = '(' . implode( ', ', $pk_json_parts ) . ')';
+					$primary_key_values     = [];
+					foreach ( $last_pk as $pk_value ) {
+						$primary_key_values[] = is_int( $pk_value ) ? $pk_value : ZS_Sync_Mysql_Helper::string_to_safe_expression( $pk_value );
+					}
+					$primary_key_value_expression = '(' . implode( ', ', $primary_key_values ) . ')';
+					$where                        = $primary_key_identifier . ' > ' . $primary_key_value_expression;
+				}
+
+				$json_object = "JSON_ARRAY(" . implode( ', ', $pk_json_parts ) . ")";
+				$order_by    = implode( ' ASC, ', $pk_identifiers ) . ' ASC';
+
+				$sql = "INSERT INTO {$sync_metadata_table_identifier} (
+						`table_name`, `primary_key`, `hash_value`
+					)
+					SELECT
+						scanned__table_name,
+						scanned__primary_key,
+						scanned__hash_value
+					FROM (
+						SELECT
+							$table_name_string AS scanned__table_name,
+							$json_object AS scanned__primary_key,
+							$hash_expression AS scanned__hash_value,
+							(SELECT @last_processed_pk := $json_object) AS last_processed_pk
+						FROM
+							$scanned_table_name_identifier scanned
+						WHERE $where
+						ORDER BY $order_by
+						LIMIT $max_chunk_size_number
+					) AS sub
+					ON DUPLICATE KEY UPDATE
+						hash_value = IF(
+							{$sync_metadata_table_identifier}.hash_value != VALUES(hash_value),
+							VALUES(hash_value),
+							{$sync_metadata_table_identifier}.hash_value
+						)
+				";
+
+				$result = $wpdb->query( $sql );
+
+				if ( false === $result ) {
+					// @todo Check the error?
+					error_log( "Failed to index next records chunk: " . $wpdb->last_error );
+
+					return false;
+				}
+
+				$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
+				$this->cursor['last_pk'] = $last_processed_pk !== null ? json_decode( $last_processed_pk, true ) : null;
+				break;
+
 			default:
 				_doing_it_wrong(
 					__METHOD__,
-					"Skipping table " . $table_name . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
+					"Skipping table " . $table_name . " with unexpected primary key type: " . $pk_type,
 					ZS_SYNC_VERSION
 				);
 
 				return false;
 		}
-		$sync_metadata_table_identifier = $this->sync_metadata_table_identifier;
-		$scanned_table_name_identifier  = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
-		$max_chunk_size_number          = (int) $this->max_chunk_size;
-
-		/**
-		 * A silly variable-based technique to get the last processed primary key.
-		 *
-		 * We assign the primary key value to this variable in each row expression,
-		 * and we process rows in a sorted order. At the end of the processing,
-		 * the variable contains the most recently seen primary key value.
-		 *
-		 * MySQL doesn't support the RETURNING keyword from Postgres so we're
-		 * simulating it with the MySQL tools that we have at our disposal.
-		 *
-		 * See https://stackoverflow.com/questions/1388025/how-to-get-id-of-the-last-updated-row-in-mysql
-		 * for more context.
-		 */
-		$wpdb->query( "SET @last_processed_pk := null" );
-		$sql = $wpdb->prepare(
-			"INSERT INTO {$sync_metadata_table_identifier} (
-                `table_name`,
-                `primary_key`,
-                `hash_value`
-            )
-            SELECT
-                %s,
-                (SELECT @last_processed_pk := scanned.$primary_key_identifier),
-                $hash_expression
-            FROM
-				$scanned_table_name_identifier scanned
-            WHERE $where
-            ORDER BY $primary_key_identifier ASC
-            LIMIT $max_chunk_size_number
-            ON DUPLICATE KEY UPDATE
-                hash_value = IF(
-					{$sync_metadata_table_identifier}.hash_value != VALUES(hash_value),
-					VALUES(hash_value),
-					{$sync_metadata_table_identifier}.hash_value
-				)",
-			...$bound_params
-		);
-
-		if ( false === $wpdb->query( $sql ) ) {
-			// @todo Check the error?
-			error_log( "Failed to index next records chunk: " . $wpdb->last_error );
-
-			return false;
-		}
-
-		$this->cursor['last_pk'] = $wpdb->get_var( "SELECT @last_processed_pk" );
 
 		return $this->cursor['last_pk'] !== null;
 	}
@@ -203,7 +334,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 		while ( true ) {
 			$table_index ++;
 
-			if ( $table_index >= count( $this->tables ) - 1 ) {
+			if ( $table_index >= count( $this->tables ) ) {
 				// We've already processed all the tables
 				return false;
 			}
@@ -222,7 +353,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 
 	private function initialize_table_metadata( $table_name ) {
 		$should_skip_table = in_array( $table_name, $this->exclude_tables );
-		$should_skip_table = apply_filters( 'zs_sync.should_skip_table', $should_skip_table, $table_name );
+		$should_skip_table = apply_filters( 'wp_sync_should_sync_table', $should_skip_table, $table_name );
 		if ( $should_skip_table ) {
 			return false;
 		}
@@ -232,26 +363,21 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 			return false;
 		}
 
-		switch ( $this->table_info->get_primary_key_php_type() ) {
-			case 'int':
-				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-					'wp_sync_metadata__bigint_key'
-				);
-				break;
-			case 'string':
-				$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
-					'wp_sync_metadata__blob_key'
-				);
-				break;
-			default:
-				_doing_it_wrong(
-					__METHOD__,
-					"Skipping table " . $this->cursor['table_name'] . " with unexpected primary key type: " . $this->table_info->get_primary_key_php_type(),
-					ZS_SYNC_VERSION
-				);
+		// Get the appropriate metadata table based on primary key type
+		$metadata_table = $this->table_info->get_sync_metadata_table();
+		if ( $metadata_table === null ) {
+			_doing_it_wrong(
+				__METHOD__,
+				"Skipping table " . $table_name . " with unsupported primary key type: " . $this->table_info->get_primary_key_type(),
+				ZS_SYNC_VERSION
+			);
 
-				return false;
+			return false;
 		}
+
+		$this->sync_metadata_table_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query(
+			$metadata_table
+		);
 
 		return true;
 	}
@@ -272,3 +398,4 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner {
 	}
 
 }
+

@@ -132,6 +132,32 @@ class ZS_Sync_Mysql_Helper {
 		return "`{$quoted_name}`";
 	}
 
+	static public function mysql_type_to_php_type( $type ) {
+		$normalized_type = strtolower($type);
+		if(str_contains($normalized_type, '(')) {
+			$normalized_type = substr($normalized_type, 0, strpos($normalized_type, '('));
+		}
+		if(str_contains($normalized_type, ' ')) {
+			$normalized_type = substr($normalized_type, 0, strpos($normalized_type, ' '));
+		}
+		switch($normalized_type) {
+			case 'char':
+			case 'varchar':
+			case 'text':
+				return 'string';
+			case 'int':
+			case 'smallint':
+			case 'bigint':
+			case 'mediumint':
+				return 'int';
+			case 'float':
+			case 'double':
+				return 'float';
+			default:
+				return 'unknown (' . $type . ')';
+		}
+	}
+
 	/**
 	 * Transforms a string to a MySQL expression that can be safely
 	 * concatenated with the rest of the query.
@@ -146,7 +172,7 @@ class ZS_Sync_Mysql_Helper {
 	 * the data by inserting a backslash in the middle of the multibyte
 	 * sequence right before the byte 22.
 	 */
-	public static function expression_for_string(string $string) {
+	public static function string_to_safe_expression(string $string) {
 		return 'UNHEX("' . bin2hex($string) . '")';
 	}
 }

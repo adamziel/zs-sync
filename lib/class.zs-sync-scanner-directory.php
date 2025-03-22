@@ -84,7 +84,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 		$insert_rows = [];
 		foreach ( $this->indexed_paths as $relative_path => $file_hash ) {
 			$insert_row_values = implode( ',', [
-				ZS_Sync_Mysql_Helper::expression_for_string( $relative_path ),
+				ZS_Sync_Mysql_Helper::string_to_safe_expression( $relative_path ),
 				(int) $file_hash,
 			] );
 			$insert_rows[]     = "($insert_row_values)";

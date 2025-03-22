@@ -1,14 +1,13 @@
-CREATE TABLE IF NOT EXISTS wp_sync_metadata__blob_key (
+CREATE TABLE IF NOT EXISTS wp_sync_metadata__composite_key (
     /* Refers to the table where this row is found. */
     table_name CHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
 
     /*
-     * Plugins can create tables that have non-numeric primary keys.
+     * Plugins can create tables that have composite primary keys.
 	 * For example, WooCommerce uses a composite key of two bigints
 	 * and, historically, have used a session_key CHAR(32) primary key.
 	 *
-	 * This column stores any string primary keys as bytes to avoid giving them any
-	 * text-encoding assumptions.
+	 * This column stores composite primary key values encoded as JSON.
 	 *
 	 * We cannot use a BLOB type here because InnoDB is limited to
 	 * 768 bytes per index key. The `primary key` entries we can store
@@ -34,8 +33,8 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__blob_key (
 
 	/**
 	 * Records are uniquely identified by their source of origin – in
-	 * this case it's the combination of their table name and their
-	 * numerical primary key.
+	 * this case it's the combination of their table name and both
+	 * parts of the numerical primary key.
 	 */
 	PRIMARY KEY (`table_name`, `primary_key`)
 );
