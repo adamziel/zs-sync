@@ -111,6 +111,10 @@ class BloomFilter implements JsonSerializable
         return $exists;
     }
 
+	public function get_bit_array_byte_length() {
+		return $this->ba->byteLength();
+	}
+
     /**
      * @return array
      */

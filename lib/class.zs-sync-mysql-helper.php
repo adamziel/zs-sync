@@ -143,6 +143,8 @@ class ZS_Sync_Mysql_Helper {
 		switch($normalized_type) {
 			case 'char':
 			case 'varchar':
+			case 'binary':
+			case 'varbinary':
 			case 'text':
 				return 'string';
 			case 'int':

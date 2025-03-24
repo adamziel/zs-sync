@@ -3,6 +3,9 @@
 /**
  * Skip the scanner tables from scanning.
  */
+
+use Pleo\BloomFilter\BloomFilter;
+
 add_filter( 'zs_sync.should_skip_table', 'zs_sync_scanner_directory_should_skip_table', 10, 2 );
 
 function zs_sync_scanner_directory_should_skip_table( $should_skip, $table_name ) {
@@ -17,10 +20,10 @@ function zs_sync_scanner_directory_should_skip_table( $should_skip, $table_name 
 	return false;
 }
 
-class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
+class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 
 	private int $max_chunk_size;
-	private ?ZS_Sync_Directory_Visitor $visitor = null;
+	private ?ZS_Sync_Sorted_Directory_Visitor $visitor = null;
 	private ?array $cursor = null;
 	private string $root_path;
 	private array $indexed_paths = [];
@@ -42,7 +45,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 	public function __construct( string $root_path, array $options = [] ) {
 		$this->root_path      = $root_path;
 		$this->max_chunk_size = $options['max_chunk_size'] ?? 1000;
-		$this->cursor         = $options['cursor'] ?? null;
+		$this->cursor         = $options['cursor'] ? json_decode($options['cursor'], true) : null;
 	}
 
 	/**
@@ -105,7 +108,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 					wp_sync_metadata__files.hash_value
 				)
 		SQL;
-		// echo $sql;
+
 		$result = $wpdb->query( $sql );
 
 		if ( $result === false ) {
@@ -117,12 +120,80 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 		return true;
 	}
 
+	public function mark_deletions(
+		string $from_cursor,
+		string $to_cursor,
+		BloomFilter $bloom_filter
+	) {
+		$visitor = ZS_Sync_Sorted_Directory_Visitor::for_directory( $this->root_path );
+		if ( ! $visitor ) {
+			_doing_it_wrong( __METHOD__, "Failed to initialize directory visitor", '1.0.0' );
+			return false;
+		}
+
+		$from_path = json_decode($from_cursor, true)['last_path'] ?? '';
+		$to_path = json_decode($to_cursor, true)['last_path'] ?? '';
+		if(!$from_path || !$to_path) {
+			return 0;
+		}
+		
+		$from_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
+		$to_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
+		
+		$sql = <<<SQL
+			SELECT file_path FROM wp_sync_metadata__files 
+			WHERE hash_value IS NOT NULL 
+			AND file_path BETWEEN $from_path_expression AND $to_path_expression
+		SQL;
+		
+		global $wpdb;
+		
+		$deleted_entries = [];
+		foreach ($wpdb->get_results($sql) as $row) {
+			if(!$bloom_filter->exists($row->file_path)) {
+				$deleted_entries[] = $row->file_path;
+			}			
+		}
+
+		if(!count($deleted_entries)) {
+			return 0;
+		}
+
+		$in_expression = [];
+		foreach($deleted_entries as $path) {
+			$in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($path);
+		}
+		$in_expression = implode(',', $in_expression);
+
+		$sql = <<<SQL
+			UPDATE wp_sync_metadata__files SET `hash_value` = NULL WHERE `file_path` IN (
+				$in_expression
+			)
+		SQL;
+
+		global $wpdb;
+		$result = $wpdb->query( $sql );
+		if ( false === $result ) {
+			error_log( 'Database error when marking deleted files: ' . $wpdb->last_error );
+			return false;
+		}
+
+		return $wpdb->rows_affected;
+	}
+
+	/**
+	 * Alphabetically compares two cursors.
+	 */
+	static public function compare_cursors( string $cursor1, string $cursor2 ): int {
+		return strcmp( $cursor1, $cursor2 );
+	}
+
 	private function initialize_scanner(): bool {
 		if ( $this->visitor !== null ) {
 			return true;
 		}
 
-		$visitor = ZS_Sync_Directory_Visitor::for_directory( $this->root_path );
+		$visitor = ZS_Sync_Sorted_Directory_Visitor::for_directory( $this->root_path );
 		if ( ! $visitor ) {
 			_doing_it_wrong( __METHOD__, "Failed to initialize directory visitor", '1.0.0' );
 
@@ -147,7 +218,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner {
 		return $this->indexed_paths;
 	}
 
-	public function get_cursor(): array {
-		return $this->cursor;
+	public function get_cursor(): string {
+		return json_encode($this->cursor);
 	}
 }

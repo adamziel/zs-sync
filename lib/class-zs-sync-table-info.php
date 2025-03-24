@@ -12,6 +12,29 @@ class ZS_Sync_Table_Info {
 	private $primary_key_type;
 	private $hash_expressions;
 
+	/**
+	 * Get all tables in the database.
+	 * 
+	 * @return array Array of table names.
+	 */
+	public static function get_tables(): array {
+		static $tables = null;
+		
+		if (null === $tables) {
+			global $wpdb;
+			$tables = $wpdb->get_col("SHOW TABLES");
+			
+			if (null === $tables) {
+				// Return empty array if there was an error
+				return [];
+			}
+
+			sort($tables);
+		}
+		
+		return $tables;
+	}
+
 	public static function for( $table_name ): ?object {
 		global $wpdb;
 
