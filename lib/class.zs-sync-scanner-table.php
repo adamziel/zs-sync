@@ -132,12 +132,6 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		for ($i = $current_table_index + 1; $i < count($this->tables); $i++) {
 			$table_name = $this->tables[$i];
 			
-			// Skip tables that should be filtered out
-			$should_skip_table = apply_filters('wp_sync_should_sync_table', false, $table_name);
-			if ($should_skip_table) {
-				continue;
-			}
-			
 			// Get table info to determine primary key type
 			$table_info = ZS_Sync_Table_Info::for($table_name);
 			if ($table_info === null) {

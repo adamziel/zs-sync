@@ -30,6 +30,11 @@ class ZS_Sync_Table_Info {
 			}
 
 			sort($tables);
+
+			// Skip tables that should be filtered out
+			$tables = array_filter($tables, function($table_name) {
+				return ! apply_filters('wp_sync_should_sync_table', false, $table_name);
+			});
 		}
 		
 		return $tables;
