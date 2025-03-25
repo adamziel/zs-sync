@@ -1,7 +1,5 @@
 <?php
 
-use Pleo\BloomFilter\BloomFilter;
-
 class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 
 	/**
@@ -13,17 +11,9 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	 * @var array List of active scanner instances
 	 */
 	private array $scanners;
-	
-	/**
-	 * @var array Combined cursor state from all scanners
-	 */
-	private array $cursor;
-	
-	/**
-	 * @var object Bloom filter instance
-	 */
-	private $indexed_pks_bloom_filter;
 
+	private array $options;
+	
 	/**
 	 * Initialize the scanner with scanner factories and options.
 	 *
@@ -33,42 +23,17 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	 *
 	 *     @type int $max_chunk_size Maximum number of items to process in one chunk. Default 50.
 	 *     @type array $cursor Combined cursor state to resume from. Default empty array.
-	 *     @type int $indexed_pks_bloom_filter_size Size of the bloom filter in bits. Default 10000.
 	 * }
 	 */
 	public function __construct(array $scanner_factories, array $options = []) {
 		$this->scanner_factories = $scanner_factories;
-		$this->cursor = isset($options['cursor']) ? json_decode($options['cursor'], true) : [];
+		$this->options = $options ?? [];
 		$this->scanners = [];
-		
-		// Initialize the bloom filter for detecting deleted items
-		if(!empty($this->cursor['indexed_pks_bloom_filter'])) {
-			$this->indexed_pks_bloom_filter = BloomFilter::initFromJson($this->cursor['indexed_pks_bloom_filter']);
-		} else {
-			// We need to restart the bloom filter at most once every 5000 scanned items to
-			// preserve the desired false positive probability.
-			$approximate_item_count = 5_000;
-			$false_positive_probability = 1 / 5_000_000;
-			/**
-			 * We'll need around 20KB for the bloom filter's bit array:
-			 * 
-			 * > $this->indexed_pks_bloom_filter->get_bit_array_byte_length()
-			 * 20066
-			 * 
-			 * The serialized base64 representation will be around 25 - 30KB. A regular BLOB
-			 * column should be more than enough to store it.
-			 */
-			$this->indexed_pks_bloom_filter = BloomFilter::init(
-				$approximate_item_count,
-				$false_positive_probability
-			);
-		}
 
 		// Initialize scanners using the factories
-		foreach ($this->scanner_factories as $factory) {
-			$this->scanners[] = $factory([
-				'cursor' => $this->cursor['scanners'][$factory] ?? [],
-				'bloom_filter' => $this->indexed_pks_bloom_filter
+		for($i = 0; $i < count($this->scanner_factories); $i++) {
+			$this->scanners[] = $this->create_scanner($i, [
+				'cursor' => $this->options['cursor']['scanners'][$i] ?? [],
 			]);
 		}
 	}
@@ -83,14 +48,21 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 			if(false === $scanner->next_chunk()) {
 				// If any scanner is done, replace it with a fresh instance
 				// to start from the beginning.
-				$factory = $this->scanner_factories[$k];
-				$this->scanners[$k] = $factory([
-					'bloom_filter' => $this->indexed_pks_bloom_filter
-				]);
+				$this->scanners[$k] = $this->create_scanner($k, []);
 			}
 		}
 
 		return true;
+	}
+
+	private function create_scanner($k, array $options): ZS_Sync_Scanner_Interface {
+		$options = array_merge(
+			$options ?? [],
+			[
+				'max_chunk_size' => $this->options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE,
+			]
+		);
+		return $this->scanner_factories[$k]($options);
 	}
 
 	/**
@@ -99,7 +71,6 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	public function get_cursor(): string {
 		$combined_cursor = [
 			'scanners' => [],
-			'indexed_pks_bloom_filter' => $this->indexed_pks_bloom_filter->jsonSerialize(),
 		];
 		
 		foreach ($this->scanners as $scanner) {
@@ -108,25 +79,6 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 		}
 		
 		return json_encode($combined_cursor);
-	}
-
-	public function assign_null_hash_to_deleted_entries(
-		string $from_cursor,
-		string $to_cursor,
-		BloomFilter $bloom_filter
-	) {
-		foreach($this->scanners as $scanner) {
-			$scanner->assign_null_hash_to_deleted_entries($from_cursor, $to_cursor, $bloom_filter);
-		}
-	}
-	
-	/**
-	 * Get the bloom filter instance.
-	 * 
-	 * @return object The bloom filter instance
-	 */
-	public function get_indexed_pks_bloom_filter() {
-		return $this->indexed_pks_bloom_filter;
 	}
 	
 	/**
