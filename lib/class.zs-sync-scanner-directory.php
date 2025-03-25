@@ -27,6 +27,12 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	private ?array $cursor = null;
 	private string $root_path;
 	private array $indexed_paths = [];
+	private bool $is_finished = false;
+	/**
+	 * Bloom filter to add file paths to.
+	 * @var \Pleo\BloomFilter\BloomFilter|null
+	 */
+	private $bloom_filter;
 
 	/**
 	 * Construct the indexer with optional settings.
@@ -40,12 +46,14 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	 * @type array $exclude_tables Array of table names to ignore during scanning. Default empty array.
 	 * @type array $cursor Existing state to resume indexing from. Contains 'table_name' and 'last_pk'
 	 *                                    keys. Default null.
+	 * @type \Pleo\BloomFilter\BloomFilter $bloom_filter The bloom filter to add file paths to. Default null.
 	 * }
 	 */
 	public function __construct( string $root_path, array $options = [] ) {
 		$this->root_path      = $root_path;
 		$this->max_chunk_size = $options['max_chunk_size'] ?? 1000;
-		$this->cursor         = $options['cursor'] ? json_decode($options['cursor'], true) : null;
+		$this->cursor         = isset($options['cursor']) ? json_decode($options['cursor'], true) : null;
+		$this->bloom_filter   = isset($options['bloom_filter']) ? $options['bloom_filter'] : null;
 	}
 
 	/**
@@ -75,7 +83,16 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 			$file_hash                             = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
 			$this->indexed_paths[ $relative_path ] = $file_hash;
 
+			// Add file path to bloom filter if set
+			if ($this->bloom_filter !== null) {
+				$this->bloom_filter->add("file:{$relative_path}");
+			}
+
 			$processed ++;
+		}
+		if( 0 === $processed) {
+			$this->is_finished = true;
+			return false;
 		}
 		$this->cursor['last_path'] = $this->visitor->get_relative_path();
 		if ( 0 === count( $this->indexed_paths ) ) {
@@ -121,36 +138,30 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	}
 
 	public function mark_deletions(
-		string $from_cursor,
-		string $to_cursor,
+		?string $from_cursor,
+		?string $to_cursor,
 		BloomFilter $bloom_filter
 	) {
-		$visitor = ZS_Sync_Sorted_Directory_Visitor::for_directory( $this->root_path );
-		if ( ! $visitor ) {
-			_doing_it_wrong( __METHOD__, "Failed to initialize directory visitor", '1.0.0' );
-			return false;
+		global $wpdb;
+
+		$from_path = $from_cursor ? json_decode($from_cursor, true)['last_path'] ?? '' : '';
+		$to_path = $to_cursor ? json_decode($to_cursor, true)['last_path'] ?? '' : '';
+		
+		$sql = "SELECT file_path FROM wp_sync_metadata__files WHERE hash_value IS NOT NULL";
+		// Only add path filtering if both paths are non-null
+		if($from_path) {
+			$from_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
+			$sql .= " AND file_path >= $from_path_expression";
 		}
 
-		$from_path = json_decode($from_cursor, true)['last_path'] ?? '';
-		$to_path = json_decode($to_cursor, true)['last_path'] ?? '';
-		if(!$from_path || !$to_path) {
-			return 0;
+		if($to_path) {
+			$to_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
+			$sql .= " AND file_path <= $to_path_expression";
 		}
-		
-		$from_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
-		$to_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
-		
-		$sql = <<<SQL
-			SELECT file_path FROM wp_sync_metadata__files 
-			WHERE hash_value IS NOT NULL 
-			AND file_path BETWEEN $from_path_expression AND $to_path_expression
-		SQL;
-		
-		global $wpdb;
-		
+
 		$deleted_entries = [];
 		foreach ($wpdb->get_results($sql) as $row) {
-			if(!$bloom_filter->exists($row->file_path)) {
+			if(!$bloom_filter->exists("file:{$row->file_path}")) {
 				$deleted_entries[] = $row->file_path;
 			}			
 		}
@@ -220,5 +231,9 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 
 	public function get_cursor(): string {
 		return json_encode($this->cursor);
+	}
+
+	public function is_finished(): bool {
+		return $this->is_finished;
 	}
 }

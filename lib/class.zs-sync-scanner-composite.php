@@ -7,6 +7,11 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 	private $cursor;
 	private $table_info;
 	private $max_chunk_size;
+	/**
+	 * Bloom filter to add primary keys to.
+	 * @var \Pleo\BloomFilter\BloomFilter|null
+	 */
+	private $bloom_filter;
 
 	public function __construct(array $options = []) {
 		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Table::DEFAULT_MAX_CHUNK_SIZE;;
@@ -15,6 +20,7 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 		}
 		$this->cursor = $options['cursor'];
 		$this->table_info = ZS_Sync_Table_Info::for($this->cursor['table_name']);
+		$this->bloom_filter = $options['bloom_filter'] ?? null;
 	}
 
 	/**
@@ -62,15 +68,7 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 		$json_object = "JSON_ARRAY(" . implode( ', ', $pk_json_parts ) . ")";
 		$order_by    = implode( ' ASC, ', $pk_identifiers ) . ' ASC';
 
-		$sql = "INSERT INTO wp_sync_metadata__composite_key (
-				`table_name`, `primary_key`, `hash_value`
-			)
-			SELECT
-				scanned__table_name,
-				scanned__primary_key,
-				scanned__hash_value
-			FROM (
-				SELECT
+		$select_query = "SELECT
 					$table_name_string AS scanned__table_name,
 					$json_object AS scanned__primary_key,
 					$hash_expression AS scanned__hash_value,
@@ -79,8 +77,16 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 					$scanned_table_name_identifier scanned
 				WHERE $where
 				ORDER BY $order_by
-				LIMIT $max_chunk_size_number
-			) AS sub
+				LIMIT $max_chunk_size_number";
+
+		$sql = "INSERT INTO wp_sync_metadata__composite_key (
+				`table_name`, `primary_key`, `hash_value`
+			)
+			SELECT
+				scanned__table_name,
+				scanned__primary_key,
+				scanned__hash_value
+			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
 					wp_sync_metadata__composite_key.hash_value != VALUES(hash_value),
@@ -100,6 +106,14 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 
 		$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
 		$this->cursor['last_pk'] = $last_processed_pk !== null ? json_decode( $last_processed_pk, true ) : null;
+		
+		// Add scanned PKs to bloom filter if set
+		if ($this->bloom_filter !== null && $this->cursor['last_pk'] !== null) {
+			$rows = $wpdb->get_results($select_query);			
+			foreach ($rows as $row) {
+				$this->bloom_filter->add("composite:{$table_name}:{$row->last_processed_pk}");
+			}
+		}
 
 		return $this->cursor['last_pk'] !== null;
 	}
@@ -111,22 +125,25 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 		$bloom_filter
 	) {
 		global $wpdb;
+		$sql = "SELECT * FROM wp_sync_metadata__composite_key WHERE hash_value IS NOT NULL AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table);
 		
-		$from_pk_json = json_encode($from_pk);
-		$to_pk_json = json_encode($to_pk);
+		if ($from_pk !== null) {
+			$from_pk_json = json_encode($from_pk);
+			$from_pk_json_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_pk_json);
+			$sql .= " AND primary_key >= $from_pk_json_safe";
+		}
 		
-		$sql = <<<SQL
-			SELECT * FROM wp_sync_metadata__composite 
-			WHERE hash_value IS NOT NULL 
-			AND primary_key >= '$from_pk_json'
-			AND primary_key <= '$to_pk_json'
-		SQL;
+		if ($to_pk !== null) {
+			$to_pk_json = json_encode($to_pk);
+			$to_pk_json_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_pk_json);
+			$sql .= " AND primary_key <= $to_pk_json_safe";
+		}
 
 		$rows = $wpdb->get_results( $sql );
 
 		$deleted_pks = [];
 		foreach($rows as $row) {
-			if($bloom_filter->exists( $row->hash_value )) {
+			if(!$bloom_filter->exists( "composite:{$table}:{$row->primary_key}")) {
 				$deleted_pks[] = $row->primary_key;
 			}
 		}
@@ -137,17 +154,18 @@ class ZS_Sync_Scanner_Composite implements ZS_Sync_Scanner_Table_Type {
 
 		$table_name_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression( $table );
 		
-		$conditions = [];
+		$in_expression = [];
 		foreach ($deleted_pks as $pk) {
-			$conditions[] = "primary_key = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($pk);
+			$in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($pk);
 		}
+		$in_expression = implode(", ", $in_expression);
 		
 		$sql = <<<SQL
-			UPDATE wp_sync_metadata__composite 
+			UPDATE wp_sync_metadata__composite_key 
 			SET hash_value = NULL 
 			WHERE
 				table_name = $table_name_expression
-				AND (" . implode(" OR ", $conditions) . ")
+				AND primary_key IN ( $in_expression )
 		SQL;
 
 		$wpdb->query( $sql );

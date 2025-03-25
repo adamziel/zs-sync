@@ -44,6 +44,12 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 	 * @var ZS_Sync_Scanner_Table_Type|null
 	 */
 	private $table_scanner = null;
+	
+	/**
+	 * Bloom filter to add primary keys to.
+	 * @var BloomFilter|null
+	 */
+	private $bloom_filter = null;
 
 	/**
 	 * Construct the table scanner factory with optional settings.
@@ -54,11 +60,13 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 	 * @type int $max_chunk_size The maximum number of rows to process at a time. Actual number of rows
 	 *                                    processed may be lower. Default 50.
 	 * @type string $cursor Existing state to resume indexing from. Default null.
+	 * @type BloomFilter $bloom_filter The bloom filter to add primary keys to. Default null.
 	 * }
 	 */
 	public function __construct( array $options = [] ) {
 		// Initialize common settings
 		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Table::DEFAULT_MAX_CHUNK_SIZE;;
+		$this->bloom_filter = $options['bloom_filter'] ?? null;
 		
 		// Get all tables in alphabetical order
 		$this->tables = ZS_Sync_Table_Info::get_tables();
@@ -68,10 +76,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 			$this->cursor = $options['cursor'];
 			$this->initialize_from_cursor();
 		} else {
-			$this->cursor = [
-				'table_name' => null,
-				'last_pk' => null,
-			];
+			$this->move_to_next_table();
 		}
 	}
 
@@ -120,7 +125,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		$current_table_index = -1;
 		
 		// Find the index of the current table
-		if ($this->cursor['table_name'] !== null) {
+		if (isset($this->cursor['table_name']) && $this->cursor['table_name'] !== null) {
 			$current_table_index = array_search($this->cursor['table_name'], $this->tables);
 			if ($current_table_index === false) {
 				$current_table_index = -1;
@@ -146,6 +151,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 					'last_pk' => null,
 				],
 				'max_chunk_size' => $this->max_chunk_size,
+				'bloom_filter' => $this->bloom_filter,
 			]);
 			
 			// Found a valid table
@@ -187,6 +193,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		$this->table_scanner = $this->create_scanner($pk_type, [
 			'cursor' => $this->cursor,
 			'max_chunk_size' => $this->max_chunk_size,
+			'bloom_filter' => $this->bloom_filter,
 		]);
 		
 		return true;
@@ -250,17 +257,10 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 	 * @return int|false Number of rows marked as deleted, or false on error
 	 */
 	static public function mark_deletions(
-		?string $from_cursor,
-		?string $to_cursor,
+		array $from_cursor,
+		array $to_cursor,
 		BloomFilter $bloom_filter
 	) {
-		$from_cursor = json_decode($from_cursor, true);
-		$to_cursor = json_decode($to_cursor, true);
-		if(!$from_cursor || !$to_cursor) {
-			_doing_it_wrong( __METHOD__, "Invalid cursor provided.", '1.0.0' );
-			return false;
-		}
-
 		$ranges_to_process = [];
 
 		// @TODO: Support this variant:
