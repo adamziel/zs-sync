@@ -7,20 +7,14 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 	private $cursor;
 	private $table_info;
 	private $max_chunk_size;
-	/**
-	 * Bloom filter to add primary keys to.
-	 * @var \Pleo\BloomFilter\BloomFilter|null
-	 */
-	private $bloom_filter;
 
 	public function __construct(array $options = []) {
-		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Table::DEFAULT_MAX_CHUNK_SIZE;;
+		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE;;
 		if(!isset($options['cursor'])) {
 			throw new \Exception('Cursor is required');
 		}
 		$this->cursor = $options['cursor'];
 		$this->table_info = ZS_Sync_Table_Info::for($this->cursor['table_name']);
-		$this->bloom_filter = $options['bloom_filter'] ?? null;
 	}
 
 	/**
@@ -36,7 +30,7 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 		if ( ! $table_name || ! $this->table_info ) {
 			return false;
 		}
-		$last_pk = $this->cursor['last_pk'];
+		$from_pk = $last_pk = $this->cursor['last_pk'];
 		if(false === $last_pk) {
 			return false;
 		}
@@ -80,6 +74,7 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
+					wp_sync_metadata__bigint_two_tuple_key.hash_value is NULL OR 
 					wp_sync_metadata__bigint_two_tuple_key.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
 					wp_sync_metadata__bigint_two_tuple_key.hash_value
@@ -98,81 +93,47 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 
 		$this->cursor['last_pk'] = $last_processed_pk !== null ? json_decode( $last_processed_pk, true ) : false;
 		
-		// Add scanned PKs to bloom filter if set
-		if ($this->bloom_filter !== null && $this->cursor['last_pk'] !== false) {
-			// Get all the rows we just processed to add them to the bloom filter
-			$rows = $wpdb->get_results($select_query);		
-			foreach ($rows as $row) {
-				// Use the primary key value as the item to add to the bloom filter
-				// We use a string prefix to ensure unique identification across different tables
-				$this->bloom_filter->add("bigint_two_tuple:{$table_name}:{$row->serialized_pk}");
-				var_dump("indexing bigint_two_tuple:{$table_name}:{$row->serialized_pk}");
+		// Set hash to null for any deleted resources in the processed range.
+		$pairs = $wpdb->get_results($select_query);
+		
+		if (!empty($pairs)) {
+			$sql = "UPDATE wp_sync_metadata__bigint_two_tuple_key 
+				SET hash_value = NULL 
+				WHERE 
+					hash_value IS NOT NULL 
+					AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table_name);
+			
+			// Construct conditions for existing records
+			$or_conditions = [];
+			foreach ($pairs as $pair) {
+				$head = (int)$pair->scanned__primary_key_head;
+				$tail = (int)$pair->scanned__primary_key_tail;
+				$or_conditions[] = "(primary_key_head = $head AND primary_key_tail = $tail)";
 			}
+			
+			$or_conditions_expr = implode(" OR ", $or_conditions);
+			if (!empty($or_conditions_expr)) {
+				$sql .= " AND NOT ( " . $or_conditions_expr . " )";
+			}
+
+			// Add range conditions
+			if ($from_pk !== null && is_array($from_pk) && isset($from_pk[0]) && isset($from_pk[1])) {
+				$from_head = (int)$from_pk[0];
+				$from_tail = (int)$from_pk[1];
+				$sql .= " AND (primary_key_head, primary_key_tail) > ($from_head, $from_tail)";
+			}
+			
+			$to_pk = $this->cursor['last_pk'];
+			if ($to_pk !== false && is_array($to_pk) && isset($to_pk[0]) && isset($to_pk[1])) {
+				$to_head = (int)$to_pk[0]; 
+				$to_tail = (int)$to_pk[1];
+				$sql .= " AND (primary_key_head, primary_key_tail) <= ($to_head, $to_tail)";
+			}
+			
+			$wpdb->query($sql);
 		}
 		
 		return $this->cursor['last_pk'] !== false;
-	}
-	
-	public static function mark_deletions(
-		$table,
-		$from_pk,
-		$to_pk,
-		$bloom_filter
-	) {
-		global $wpdb;
-		$table_name_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression( $table );
-		$sql = "SELECT 
-			JSON_ARRAY(primary_key_head, primary_key_tail) AS serialized_pk,
-			primary_key_head,
-			primary_key_tail
-		FROM wp_sync_metadata__bigint_two_tuple_key 
-		WHERE hash_value IS NOT NULL AND table_name = " . $table_name_expression;
-		
-		if ($from_pk !== null) {
-			$from_pk_head = (int) $from_pk[0];
-			$from_pk_tail = (int) $from_pk[1];
-			$sql .= " AND (primary_key_head, primary_key_tail) > ($from_pk_head, $from_pk_tail)";
-		}
-		
-		if ($to_pk !== null) {
-			$to_pk_head = (int) $to_pk[0];
-			$to_pk_tail = (int) $to_pk[1];
-			$sql .= " AND (primary_key_head, primary_key_tail) <= ($to_pk_head, $to_pk_tail)";
-		}
-
-		$rows = $wpdb->get_results( $sql );
-
-		$deleted_pks = [];
-		foreach($rows as $row) {
-			if(!$bloom_filter->exists( "bigint_two_tuple:{$table}:{$row->serialized_pk}" )) {
-				$deleted_pks[] = [
-					'head' => $row->primary_key_head,
-					'tail' => $row->primary_key_tail
-				];
-			}
-		}
-
-		if (empty($deleted_pks)) {
-			return 0;
-		}
-		
-		$or_conditions = [];
-		foreach ($deleted_pks as $pk) {
-			$or_conditions[] = "(primary_key_head = {$pk['head']} AND primary_key_tail = {$pk['tail']})";
-		}
-
-		$or_conditions = implode(" OR ", $or_conditions);
-		$sql = <<<SQL
-			UPDATE wp_sync_metadata__bigint_two_tuple_key 
-			SET hash_value = NULL 
-			WHERE
-				table_name = $table_name_expression
-				AND ( $or_conditions )
-		SQL;
-
-		$wpdb->query( $sql );
-
-		return count($deleted_pks);
 	}
 
 	/**

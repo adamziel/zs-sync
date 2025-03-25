@@ -7,20 +7,14 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 	private $cursor;
 	private $table_info;
 	private $max_chunk_size;
-	/**
-	 * Bloom filter to add primary keys to.
-	 * @var \Pleo\BloomFilter\BloomFilter|null
-	 */
-	private $bloom_filter;
 
 	public function __construct(array $options = []) {
-		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Table::DEFAULT_MAX_CHUNK_SIZE;;
+		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE;;
 		if(!isset($options['cursor'])) {
 			throw new \Exception('Cursor is required');
 		}
 		$this->cursor = $options['cursor'];
 		$this->table_info = ZS_Sync_Table_Info::for($this->cursor['table_name']);
-		$this->bloom_filter = $options['bloom_filter'] ?? null;
 	}
 
 	/**
@@ -37,7 +31,7 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 			return false;
 		}
 		$table_name_string              = ZS_Sync_Mysql_Helper::string_to_safe_expression( $table_name );
-		$last_pk                        = $this->cursor['last_pk'];
+		$from_pk = $last_pk             = $this->cursor['last_pk'];
 		$hash_expression                = $this->table_info->build_row_hash_expression();
 		$scanned_table_name_identifier  = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
 		$max_chunk_size_number          = (int) $this->max_chunk_size;
@@ -73,6 +67,7 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
+					wp_sync_metadata__bigint_key.hash_value is NULL OR 
 					wp_sync_metadata__bigint_key.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
 					wp_sync_metadata__bigint_key.hash_value
@@ -89,67 +84,30 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 		$last_processed_pk       = $wpdb->get_var( "SELECT @last_processed_pk" );
 		$this->cursor['last_pk'] = $last_processed_pk;
 		
-		// Add scanned PKs to bloom filter if set
-		if ($this->bloom_filter !== null) {
-			$rows = $wpdb->get_results($select_query);
-			foreach ($rows as $row) {
-				// Use the primary key value as the item to add to the bloom filter
-				// We use a string prefix to ensure unique identification across different tables
-				$this->bloom_filter->add("bigint:{$table_name}:{$row->serialized_pk}");
-			}
+		// Set hash to null for any deleted resources in the processed range.
+		$sql = "UPDATE wp_sync_metadata__bigint_key 
+				SET hash_value = NULL 
+				WHERE hash_value IS NOT NULL 
+				AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table_name);
+			
+		$existing_pks = array_map('intval', $wpdb->get_col($select_query, 3));
+		$existing_pks_in_expression = implode(", ", $existing_pks);
+		if (!empty($existing_pks_in_expression)) {
+			$sql .= " AND primary_key NOT IN ( $existing_pks_in_expression )";
 		}
 
-		return $this->cursor['last_pk'] !== null;
-	}
-
-	public static function mark_deletions(
-		$table,
-		$from_pk,
-		$to_pk,
-		$bloom_filter
-	) {
-		global $wpdb;
-		$sql = "SELECT * FROM wp_sync_metadata__bigint_key WHERE hash_value IS NOT NULL AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table);
-		
 		if ($from_pk !== null) {
-			$sql .= " AND primary_key >= " . (int) $from_pk;
+			$sql .= " AND primary_key > " . (int) $from_pk;
 		}
-		
+			
+		$to_pk = $last_processed_pk;
 		if ($to_pk !== null) {
 			$sql .= " AND primary_key <= " . (int) $to_pk;
 		}
 
-		$rows = $wpdb->get_results( $sql );
+		$wpdb->query($sql);
 
-		$deleted_pks = [];
-		foreach($rows as $row) {
-			if(!$bloom_filter->exists( "bigint:{$table}:{$row->primary_key}" )) {
-				$deleted_pks[] = (int) $row->primary_key;
-			}
-		}
-
-		if (empty($deleted_pks)) {
-			return 0;
-		}
-
-		$in_expression = [];
-		foreach ($deleted_pks as $pk) {
-			$in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($pk);
-		}
-		$in_expression = implode(", ", $in_expression);
-
-		$table_name_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression( $table );
-		$sql = <<<SQL
-			UPDATE wp_sync_metadata__bigint_key 
-			SET hash_value = NULL 
-			WHERE
-				table_name = $table_name_expression
-				AND primary_key IN ( $in_expression )
-		SQL;
-
-		$wpdb->query( $sql );
-
-		return count($deleted_pks);
+		return $this->cursor['last_pk'] !== null;
 	}
 
 	/**

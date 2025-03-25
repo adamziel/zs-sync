@@ -38,13 +38,8 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	 */
 	public function __construct(array $scanner_factories, array $options = []) {
 		$this->scanner_factories = $scanner_factories;
-		$this->cursor = $options['cursor'] ? json_decode($options['cursor'], true) : [];
+		$this->cursor = isset($options['cursor']) ? json_decode($options['cursor'], true) : [];
 		$this->scanners = [];
-		
-		// Initialize scanners using the factories
-		foreach ($this->scanner_factories as $factory) {
-			$this->scanners[] = $factory($this->cursor['scanners'][$factory] ?? []);
-		}
 		
 		// Initialize the bloom filter for detecting deleted items
 		if(!empty($this->cursor['indexed_pks_bloom_filter'])) {
@@ -68,6 +63,14 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 				$false_positive_probability
 			);
 		}
+
+		// Initialize scanners using the factories
+		foreach ($this->scanner_factories as $factory) {
+			$this->scanners[] = $factory([
+				'cursor' => $this->cursor['scanners'][$factory] ?? [],
+				'bloom_filter' => $this->indexed_pks_bloom_filter
+			]);
+		}
 	}
 
 	/**
@@ -78,10 +81,12 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	public function next_chunk(): bool {
 		foreach($this->scanners as $k => $scanner) {
 			if(false === $scanner->next_chunk()) {
-				// If the scanner is done, replace it with a fresh instance
+				// If any scanner is done, replace it with a fresh instance
 				// to start from the beginning.
-				$factory = $scanner->get_factory();
-				$this->scanners[$k] = $factory();
+				$factory = $this->scanner_factories[$k];
+				$this->scanners[$k] = $factory([
+					'bloom_filter' => $this->indexed_pks_bloom_filter
+				]);
 			}
 		}
 
@@ -94,7 +99,7 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	public function get_cursor(): string {
 		$combined_cursor = [
 			'scanners' => [],
-			'bloom_filter' => $this->indexed_pks_bloom_filter->jsonSerialize(),
+			'indexed_pks_bloom_filter' => $this->indexed_pks_bloom_filter->jsonSerialize(),
 		];
 		
 		foreach ($this->scanners as $scanner) {
@@ -103,6 +108,16 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 		}
 		
 		return json_encode($combined_cursor);
+	}
+
+	public function assign_null_hash_to_deleted_entries(
+		string $from_cursor,
+		string $to_cursor,
+		BloomFilter $bloom_filter
+	) {
+		foreach($this->scanners as $scanner) {
+			$scanner->assign_null_hash_to_deleted_entries($from_cursor, $to_cursor, $bloom_filter);
+		}
 	}
 	
 	/**

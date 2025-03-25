@@ -28,8 +28,6 @@ function zs_sync_scanner_table_should_skip_table( $should_skip, $table_name ) {
  */
 class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 
-	const DEFAULT_MAX_CHUNK_SIZE = 2;
-
 	// Current state of the scanner
 	private ?array $cursor = null;
 	
@@ -65,7 +63,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 	 */
 	public function __construct( array $options = [] ) {
 		// Initialize common settings
-		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Table::DEFAULT_MAX_CHUNK_SIZE;;
+		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE;;
 		$this->bloom_filter = $options['bloom_filter'] ?? null;
 		
 		// Get all tables in alphabetical order
@@ -92,7 +90,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		}
 		
 		// If we're not currently processing a table, find the next one
-		if ($this->cursor['table_name'] === null) {
+		if (!isset($this->cursor['table_name'])) {
 			if (!$this->move_to_next_table()) {
 				return false;
 			}
@@ -248,112 +246,5 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		return $this->cursor['last_pk'];
 	}
 
-	/**
-	 * Mark rows as deleted between two cursor points.
-	 * 
-	 * @param string|null $from_cursor The starting cursor state
-	 * @param string|null $to_cursor The ending cursor state
-	 * @param BloomFilter $bloom_filter Bloom filter to use for checking deletion
-	 * @return int|false Number of rows marked as deleted, or false on error
-	 */
-	static public function mark_deletions(
-		array $from_cursor,
-		array $to_cursor,
-		BloomFilter $bloom_filter
-	) {
-		$ranges_to_process = [];
-
-		// @TODO: Support this variant:
-		//        we've scanned everything, wrapped around, and 
-		//        finished with a to_pk < from_pk.
-		if( $from_cursor['table_name'] === $to_cursor['table_name'] ) {
-			$ranges_to_process[] = [
-				'table_name' => $from_cursor['table_name'],
-				'from_pk' => $from_cursor['last_pk'],
-				'to_pk' => $to_cursor['last_pk'],
-			];
-		} else {
-			$ranges_to_process[] = [
-				'table_name' => $from_cursor['table_name'],
-				'from_pk' => $from_cursor['last_pk'],
-				'to_pk' => null,
-			];
-			$ranges_to_process[] = [
-				'table_name' => $to_cursor['table_name'],
-				'from_pk' => null,
-				'to_pk' => $to_cursor['last_pk'],
-			];
-			
-			$tables_between = [];
-			$tables = ZS_Sync_Table_Info::get_tables();
-			sort($tables); // Ensure alphabetical order
-			foreach($tables as $table) {
-				if(
-					strcmp($table, $from_cursor['table_name']) > 0 &&
-					strcmp($table, $to_cursor['table_name']) < 0
-				) {
-					$tables_between[] = $table;
-				}
-			}
-
-			foreach($tables_between as $table) {
-				$ranges_to_process[] = [
-					'table_name' => $table,
-					'from_pk' => null,
-					'to_pk' => null,
-				];
-			}	
-		}
-
-		if(!count($ranges_to_process)) {
-			return 0;
-		}
-
-		$affected_rows = 0;
-		foreach($ranges_to_process as $range) {
-			$table_info = ZS_Sync_Table_Info::for( $range['table_name'] );
-			if ( $table_info === null ) {
-				_doing_it_wrong( __METHOD__, "Table info not found for table: " . $range['table_name'], ZS_SYNC_VERSION );
-				continue;
-			}
-
-			switch($table_info->get_primary_key_type()) {
-				case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BIGINT:
-					$affected_rows += ZS_Sync_Scanner_Bigint::mark_deletions( 
-						$range['table_name'], 
-						$range['from_pk'], 
-						$range['to_pk'], 
-						$bloom_filter 
-					);
-					break;
-				case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BLOB:
-					$affected_rows += ZS_Sync_Scanner_Blob::mark_deletions( 
-						$range['table_name'], 
-						$range['from_pk'], 
-						$range['to_pk'], 
-						$bloom_filter 
-					);
-					break;
-				case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_BIGINT_TWO_TUPLE:
-					$affected_rows += ZS_Sync_Scanner_Bigint_Two_Tuple::mark_deletions( 
-						$range['table_name'], 
-						$range['from_pk'], 
-						$range['to_pk'], 
-						$bloom_filter 
-					);
-					break;
-				case ZS_Sync_Table_Info::PRIMARY_KEY_TYPE_COMPOSITE:
-					$affected_rows += ZS_Sync_Scanner_Composite::mark_deletions( 
-						$range['table_name'], 
-						$range['from_pk'], 
-						$range['to_pk'], 
-						$bloom_filter 
-					);
-					break;
-			}
-		}
-
-		return $affected_rows;
-	}
 }
 

@@ -4,8 +4,6 @@
  * Skip the scanner tables from scanning.
  */
 
-use Pleo\BloomFilter\BloomFilter;
-
 add_filter( 'zs_sync.should_skip_table', 'zs_sync_scanner_directory_should_skip_table', 10, 2 );
 
 function zs_sync_scanner_directory_should_skip_table( $should_skip, $table_name ) {
@@ -28,11 +26,6 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	private string $root_path;
 	private array $indexed_paths = [];
 	private bool $is_finished = false;
-	/**
-	 * Bloom filter to add file paths to.
-	 * @var \Pleo\BloomFilter\BloomFilter|null
-	 */
-	private $bloom_filter;
 
 	/**
 	 * Construct the indexer with optional settings.
@@ -46,14 +39,12 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	 * @type array $exclude_tables Array of table names to ignore during scanning. Default empty array.
 	 * @type array $cursor Existing state to resume indexing from. Contains 'table_name' and 'last_pk'
 	 *                                    keys. Default null.
-	 * @type \Pleo\BloomFilter\BloomFilter $bloom_filter The bloom filter to add file paths to. Default null.
 	 * }
 	 */
 	public function __construct( string $root_path, array $options = [] ) {
 		$this->root_path      = $root_path;
-		$this->max_chunk_size = $options['max_chunk_size'] ?? 1000;
-		$this->cursor         = isset($options['cursor']) ? json_decode($options['cursor'], true) : null;
-		$this->bloom_filter   = isset($options['bloom_filter']) ? $options['bloom_filter'] : null;
+		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE;
+		$this->cursor         = isset($options['cursor']) ? $options['cursor'] : null;
 	}
 
 	/**
@@ -67,6 +58,9 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 			return false;
 		}
 
+		// Save the starting path for this chunk for use in detecting deleted files
+		$from_path = isset($this->cursor['last_path']) ? $this->cursor['last_path'] : '';
+		
 		// Crc32 the next $max_chunk_size files
 		$processed           = 0;
 		$this->indexed_paths = [];
@@ -82,16 +76,11 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 			$relative_path                         = $this->visitor->get_relative_path();
 			$file_hash                             = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
 			$this->indexed_paths[ $relative_path ] = $file_hash;
-
-			// Add file path to bloom filter if set
-			if ($this->bloom_filter !== null) {
-				$this->bloom_filter->add("file:{$relative_path}");
-			}
-
 			$processed ++;
 		}
 		if( 0 === $processed) {
 			$this->is_finished = true;
+			$this->set_hash_to_null_for_deleted_files( $from_path );
 			return false;
 		}
 		$this->cursor['last_path'] = $this->visitor->get_relative_path();
@@ -100,7 +89,6 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		}
 
 		// Upsert the hash information to the sync metadata table
-
 		$insert_rows = [];
 		foreach ( $this->indexed_paths as $relative_path => $file_hash ) {
 			$insert_row_values = implode( ',', [
@@ -120,7 +108,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 				$insert_expression
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
-					wp_sync_metadata__files.hash_value != VALUES(hash_value),
+					wp_sync_metadata__files.hash_value is NULL OR wp_sync_metadata__files.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
 					wp_sync_metadata__files.hash_value
 				)
@@ -133,63 +121,44 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 
 			return false;
 		}
+		
+		// Set hash to null for any deleted files in the processed range
+		if (!empty($this->indexed_paths)) {
+			$this->set_hash_to_null_for_deleted_files( $from_path, $this->cursor['last_path'] );
+		}
 
 		return true;
 	}
 
-	public function mark_deletions(
-		?string $from_cursor,
-		?string $to_cursor,
-		BloomFilter $bloom_filter
-	) {
+	private function set_hash_to_null_for_deleted_files( ?string $from_path, ?string $to_path = null): void {
 		global $wpdb;
 
-		$from_path = $from_cursor ? json_decode($from_cursor, true)['last_path'] ?? '' : '';
-		$to_path = $to_cursor ? json_decode($to_cursor, true)['last_path'] ?? '' : '';
+		$sql = "UPDATE wp_sync_metadata__files 
+				SET hash_value = NULL 
+				WHERE hash_value IS NOT NULL";
+
+		$existing_paths_in_expression = [];
+		foreach (array_keys($this->indexed_paths) as $path) {
+			$existing_paths_in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($path);
+		}
+		$existing_paths_in_expression = implode(", ", $existing_paths_in_expression);
+
+		if (!empty($existing_paths_in_expression)) {
+			$sql .= " AND file_path NOT IN ( $existing_paths_in_expression )";
+		}
 		
-		$sql = "SELECT file_path FROM wp_sync_metadata__files WHERE hash_value IS NOT NULL";
-		// Only add path filtering if both paths are non-null
-		if($from_path) {
-			$from_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
-			$sql .= " AND file_path >= $from_path_expression";
+		// Add range conditions for the current chunk
+		if ($from_path) {
+			$from_path_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
+			$sql .= " AND file_path > $from_path_safe";
+		}
+		
+		if ($to_path) {
+			$to_path_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
+			$sql .= " AND file_path <= $to_path_safe";
 		}
 
-		if($to_path) {
-			$to_path_expression = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
-			$sql .= " AND file_path <= $to_path_expression";
-		}
-
-		$deleted_entries = [];
-		foreach ($wpdb->get_results($sql) as $row) {
-			if(!$bloom_filter->exists("file:{$row->file_path}")) {
-				$deleted_entries[] = $row->file_path;
-			}			
-		}
-
-		if(!count($deleted_entries)) {
-			return 0;
-		}
-
-		$in_expression = [];
-		foreach($deleted_entries as $path) {
-			$in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($path);
-		}
-		$in_expression = implode(',', $in_expression);
-
-		$sql = <<<SQL
-			UPDATE wp_sync_metadata__files SET `hash_value` = NULL WHERE `file_path` IN (
-				$in_expression
-			)
-		SQL;
-
-		global $wpdb;
-		$result = $wpdb->query( $sql );
-		if ( false === $result ) {
-			error_log( 'Database error when marking deleted files: ' . $wpdb->last_error );
-			return false;
-		}
-
-		return $wpdb->rows_affected;
+		$wpdb->query($sql);
 	}
 
 	/**
@@ -229,8 +198,8 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		return $this->indexed_paths;
 	}
 
-	public function get_cursor(): string {
-		return json_encode($this->cursor);
+	public function get_cursor() {
+		return $this->cursor;
 	}
 
 	public function is_finished(): bool {
