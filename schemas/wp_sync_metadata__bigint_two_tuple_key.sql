@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__bigint_two_tuple_key (
     /*
      * BIGINT two-tuple primary key.
      */
-    primary_key_head BIGINT NOT NULL,
-    primary_key_tail BIGINT NOT NULL,
+    primary_key_first BIGINT NOT NULL,
+    primary_key_second BIGINT NOT NULL,
 
     /*
      * Refers to the most-recent time that this resource was
@@ -26,5 +26,5 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__bigint_two_tuple_key (
 	 * this case it's the combination of their table name and both
 	 * parts of the numerical primary key.
 	 */
-	PRIMARY KEY (`table_name`, `primary_key_head`, `primary_key_tail`)
+	PRIMARY KEY (`table_name`, `primary_key_first`, `primary_key_second`)
 );

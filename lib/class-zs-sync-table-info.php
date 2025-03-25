@@ -142,28 +142,6 @@ class ZS_Sync_Table_Info {
 		return $this->primary_key_type;
 	}
 
-	public function encode_composite_key( $values ) {
-		// For bigint_two_tuple, we return an array with the two values
-		if ( $this->primary_key_type === self::PRIMARY_KEY_TYPE_BIGINT_TWO_TUPLE ) {
-			if ( count( $values ) !== 2 ) {
-				return null;
-			}
-
-			return array(
-				'head' => (int) $values[0],
-				'tail' => (int) $values[1],
-			);
-		}
-
-		// For general composite keys, we JSON encode the values
-		if ( $this->primary_key_type === self::PRIMARY_KEY_TYPE_COMPOSITE ) {
-			return json_encode( $values );
-		}
-
-		// For single key, we just return the value
-		return $values[0];
-	}
-
 	public function build_row_hash_expression() {
 		if ( ! $this->hash_expressions ) {
 			$column_expressions = [];

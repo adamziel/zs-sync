@@ -43,33 +43,33 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 		$wpdb->query( "SET @last_processed_pk := null" );
 
 		$primary_keys     = $this->table_info->get_primary_keys();
-		$primary_key_head = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[0] );
-		$primary_key_tail = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[1] );
+		$primary_key_first = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[0] );
+		$primary_key_second = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_keys[1] );
 
 		$where = '1 = 1';
 		if ( $last_pk !== null && is_array( $last_pk ) && isset( $last_pk[0] ) && isset( $last_pk[1] ) ) {
-			$where = "($primary_key_head, $primary_key_tail) > (" . (int) $last_pk[0] . ", " . (int) $last_pk[1] . ")";
+			$where = "($primary_key_first, $primary_key_second) > (" . (int) $last_pk[0] . ", " . (int) $last_pk[1] . ")";
 		}
 
 		$select_query = "SELECT
 				$table_name_string AS scanned__table_name,
-				$primary_key_head AS scanned__primary_key_head,
-				$primary_key_tail AS scanned__primary_key_tail,
+				$primary_key_first AS scanned__primary_key_first,
+				$primary_key_second AS scanned__primary_key_second,
 				$hash_expression AS scanned__hash_value,
-				(SELECT @last_processed_pk := JSON_ARRAY(scanned.$primary_key_head, scanned.$primary_key_tail)) AS serialized_pk
+				(SELECT @last_processed_pk := JSON_ARRAY(scanned.$primary_key_first, scanned.$primary_key_second)) AS serialized_pk
 			FROM
 				$scanned_table_name_identifier scanned
 			WHERE $where
-			ORDER BY $primary_key_head ASC, $primary_key_tail ASC
+			ORDER BY $primary_key_first ASC, $primary_key_second ASC
 			LIMIT $max_chunk_size_number";
 
 		$sql = "INSERT INTO wp_sync_metadata__bigint_two_tuple_key (
-				`table_name`, `primary_key_head`, `primary_key_tail`, `hash_value`
+				`table_name`, `primary_key_first`, `primary_key_second`, `hash_value`
 			)
 			SELECT 
 				scanned__table_name,
-				scanned__primary_key_head,
-				scanned__primary_key_tail,
+				scanned__primary_key_first,
+				scanned__primary_key_second,
 				scanned__hash_value
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
@@ -106,9 +106,9 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 			// Construct conditions for existing records
 			$or_conditions = [];
 			foreach ($pairs as $pair) {
-				$head = (int)$pair->scanned__primary_key_head;
-				$tail = (int)$pair->scanned__primary_key_tail;
-				$or_conditions[] = "(primary_key_head = $head AND primary_key_tail = $tail)";
+				$first = (int)$pair->scanned__primary_key_first;
+				$second = (int)$pair->scanned__primary_key_second;
+				$or_conditions[] = "(primary_key_first = $first AND primary_key_second = $second)";
 			}
 			
 			$or_conditions_expr = implode(" OR ", $or_conditions);
@@ -118,16 +118,16 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 
 			// Add range conditions
 			if ($from_pk !== null && is_array($from_pk) && isset($from_pk[0]) && isset($from_pk[1])) {
-				$from_head = (int)$from_pk[0];
-				$from_tail = (int)$from_pk[1];
-				$sql .= " AND (primary_key_head, primary_key_tail) > ($from_head, $from_tail)";
+				$from_first = (int)$from_pk[0];
+				$from_second = (int)$from_pk[1];
+				$sql .= " AND (primary_key_first, primary_key_second) > ($from_first, $from_second)";
 			}
 			
 			$to_pk = $this->cursor['last_pk'];
 			if ($to_pk !== false && is_array($to_pk) && isset($to_pk[0]) && isset($to_pk[1])) {
-				$to_head = (int)$to_pk[0]; 
-				$to_tail = (int)$to_pk[1];
-				$sql .= " AND (primary_key_head, primary_key_tail) <= ($to_head, $to_tail)";
+				$to_first = (int)$to_pk[0]; 
+				$to_second = (int)$to_pk[1];
+				$sql .= " AND (primary_key_first, primary_key_second) <= ($to_first, $to_second)";
 			}
 			
 			$wpdb->query($sql);

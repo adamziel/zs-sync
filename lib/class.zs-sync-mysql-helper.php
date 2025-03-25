@@ -145,18 +145,30 @@ class ZS_Sync_Mysql_Helper {
 			case 'varchar':
 			case 'binary':
 			case 'varbinary':
+			case 'tinytext':
 			case 'text':
+			case 'mediumtext':
+			case 'longtext':
+			case 'enum':
+			case 'blob':
+			case 'tinyblob':
+			case 'mediumblob':
+			case 'longblob':
 				return 'string';
 			case 'int':
 			case 'smallint':
 			case 'bigint':
 			case 'mediumint':
+			case 'tinyint':
+			case 'numeric':
+			case 'integer':
 				return 'int';
 			case 'float':
 			case 'double':
+			case 'real':
 				return 'float';
 			default:
-				return 'unknown (' . $type . ')';
+				return 'unsupported (' . $type . ')';
 		}
 	}
 
