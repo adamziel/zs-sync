@@ -11,13 +11,13 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__blob_key (
 	 * text-encoding assumptions.
 	 *
 	 * We cannot use a BLOB type here because InnoDB is limited to
-	 * 768 bytes per index key. The `primary key` entries we can store
-	 * in this table are, therefore, limited to 768 bytes - 64 bytes
-	 * for the table name = 704 bytes.
+	 * 3072 bytes per index key. Even though the `table_name` entry is 64 bytes,
+	 * MariaDB seems to count it as 256 bytes. Any VARBINARY length greater than
+	 * 3072 - 256 = 2816 bytes causes a "Specified key was too long;" error.
 	 *
      * For integer primary keys, see `wp_sync_metadata__bigint_key`.
      */
-    primary_key VARBINARY(704) NOT NULL,
+    primary_key VARBINARY(2816) NOT NULL,
 
     /*
      * Refers to the most-recent time that this resource was
