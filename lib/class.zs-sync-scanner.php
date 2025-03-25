@@ -33,7 +33,7 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 		// Initialize scanners using the factories
 		for($i = 0; $i < count($this->scanner_factories); $i++) {
 			$this->scanners[] = $this->create_scanner($i, [
-				'cursor' => $this->options['cursor']['scanners'][$i] ?? [],
+				'cursor' => $options['cursor'][$i] ?? [],
 			]);
 		}
 	}
@@ -68,17 +68,14 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	/**
 	 * Returns a cursor for resuming the scan from the current state.
 	 */
-	public function get_cursor(): string {
-		$combined_cursor = [
-			'scanners' => [],
-		];
+	public function get_cursor(): array {
+		$combined_cursor = [];
 		
-		foreach ($this->scanners as $scanner) {
-			$scanner_class = get_class($scanner);
-			$combined_cursor['scanners'][$scanner_class] = $scanner->get_cursor();
+		foreach ($this->scanners as $k => $scanner) {
+			$combined_cursor[$k] = $scanner->get_cursor();
 		}
 		
-		return json_encode($combined_cursor);
+		return $combined_cursor;
 	}
 	
 	/**
