@@ -1,6 +1,6 @@
 <?php
 
-class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
+class ZS_Sync_Continuous_Scanner implements ZS_Sync_Scanner_Interface {
 
 	/**
 	 * @var array List of scanner factories
@@ -44,11 +44,11 @@ class ZS_Sync_Scanner implements ZS_Sync_Scanner_Interface {
 	 * from the beginning.
 	 */
 	public function next_chunk(): bool {
-		foreach($this->scanners as $k => $scanner) {
-			if(false === $scanner->next_chunk()) {
+		for($i = 0; $i < count($this->scanners); $i++) {
+			if(false === $this->scanners[$i]->next_chunk()) {
 				// If any scanner is done, replace it with a fresh instance
 				// to start from the beginning.
-				$this->scanners[$k] = $this->create_scanner($k, []);
+				$this->scanners[$i] = $this->create_scanner($i, []);
 			}
 		}
 
