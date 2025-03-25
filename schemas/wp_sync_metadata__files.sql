@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__files (
 
     /*
      * Refers to the most-recent time that this resource was
-     * scanned to check for the probability that it’s stale.
+     * scanned to check for the probability that it's stale.
      */
     time_of_last_scan TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -21,5 +21,10 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__files (
      * Sized for the CRC32. If a stronger hash is required,
      * then expand as necessary.
     */
-    hash_value INT UNSIGNED
+    hash_value INT UNSIGNED,
+
+    /*
+     * The size of the file in bytes.
+     */
+    filesize BIGINT UNSIGNED
 );

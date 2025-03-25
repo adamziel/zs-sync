@@ -73,9 +73,14 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 				continue;
 			}
 
-			$relative_path                         = $this->visitor->get_relative_path();
-			$file_hash                             = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
-			$this->indexed_paths[ $relative_path ] = $file_hash;
+			$relative_path = $this->visitor->get_relative_path();
+			$file_hash     = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
+			$file_size     = file_exists( $this->visitor->get_absolute_path() ) ? filesize( $this->visitor->get_absolute_path() ) : 0;
+
+			$this->indexed_paths[ $relative_path ] = [
+				'hash' => $file_hash,
+				'size' => $file_size,
+			];
 			$processed ++;
 		}
 		if( 0 === $processed) {
@@ -90,10 +95,11 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 
 		// Upsert the hash information to the sync metadata table
 		$insert_rows = [];
-		foreach ( $this->indexed_paths as $relative_path => $file_hash ) {
+		foreach ( $this->indexed_paths as $relative_path => $file_details ) {
 			$insert_row_values = implode( ',', [
 				ZS_Sync_Mysql_Helper::string_to_safe_expression( $relative_path ),
-				(int) $file_hash,
+				(int) $file_details['hash'],
+				(int) $file_details['size'],
 			] );
 			$insert_rows[]     = "($insert_row_values)";
 		}
@@ -102,11 +108,17 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		$sql = <<<SQL
 			INSERT INTO wp_sync_metadata__files (
 				`file_path`,
-				`hash_value`
+				`hash_value`,
+				`filesize`
 			)
 			VALUES
 				$insert_expression
 			ON DUPLICATE KEY UPDATE
+				filesize = IF(
+					wp_sync_metadata__files.hash_value is NULL OR wp_sync_metadata__files.hash_value != VALUES(hash_value),
+					VALUES(filesize),
+					wp_sync_metadata__files.filesize
+				),				
 				hash_value = IF(
 					wp_sync_metadata__files.hash_value is NULL OR wp_sync_metadata__files.hash_value != VALUES(hash_value),
 					VALUES(hash_value),

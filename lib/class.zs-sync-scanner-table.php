@@ -113,6 +113,8 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		
 		return true;
 	}
+
+	
 	
 	/**
 	 * Move to the next table that has a valid primary key and can be processed.
