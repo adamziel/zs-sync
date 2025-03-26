@@ -35,20 +35,21 @@ class ZS_Sync_Resource_Provider {
 		$this->max_db_rows_per_response = $options['max_db_rows_per_response'] ?? 1000;
 	}
 
-	public function list_resources( $query = array() ) {
-		$client_version = $query['client_version'] ?? null;
+	public function list_resources( ZS_Sync_Resource_List_Request $request ) {
+		$since_version = $request->since_version;
+		$limit = (int)min($request->limit ?? 1000, 1000); // Ensure limit is no more than 1000
 
 		// If we're retrieving metadata with pagination
 		global $wpdb;
 
 		// Build the UNION SELECT query combining all metadata tables
 		$scan_timestamp_filter = '';
-		if ( ! empty( $client_version ) ) {
+		if ( ! empty( $since_version ) ) {
 			// @TODO: Account for `hash_value=null`
 			$scan_timestamp_filter =
 				'AND (time_of_last_scan, hash_value) >= (' .
-					ZS_Sync_Mysql_Helper::string_to_safe_expression( $client_version['time_of_last_scan'] ) . ', ' .
-					((int)$client_version['hash_value']) .
+					ZS_Sync_Mysql_Helper::string_to_safe_expression( $since_version['time_of_last_scan'] ) . ', ' .
+					((int)$since_version['hash_value']) .
 				')';
 		}
 
@@ -114,7 +115,7 @@ class ZS_Sync_Resource_Provider {
 			WHERE true $scan_timestamp_filter
 			-- Stable ordering. If the hash_value changes, the time_of_last_scan will also change.
 			ORDER BY time_of_last_scan ASC, table_name ASC, hash_value ASC
-			LIMIT 100
+			LIMIT $limit
 		";
 
 		$results = $wpdb->get_results( $union_query );
@@ -151,22 +152,18 @@ class ZS_Sync_Resource_Provider {
 
 		return $resources;
 	}
-	public function get_resources( $request ) {
+
+	public function get_resources( ZS_Sync_Resource_Fetch_Request $request ) {
 		global $wpdb;
 
-		$resources = array();
+		$cbor_map = new ZS_Sync_CBOR_Resource_Encoder();
+
 		$db_rows = 0;
 		$file_chunks = 0;
-		foreach ( $request as $uri_or_query ) {
-			if(is_array($uri_or_query)) {
-				$uri = $uri_or_query['uri'];
-				$query = $uri_or_query;
-			} else {
-				$uri = $uri_or_query;
-				$query = array();
-			}
-
-			$zs_uri = ZS_Sync_URI::from_string( $uri );
+		
+		foreach ( $request->resources as $resource_query ) {
+			$zs_uri = $resource_query->uri;
+			
 			switch ( $zs_uri->resource_type ) {
 				case 'bigint_key':
 					if( $db_rows >= $this->max_db_rows_per_response ) {
@@ -178,7 +175,8 @@ class ZS_Sync_Resource_Provider {
 					$table_name_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
 					$table_info = ZS_Sync_Table_Info::for( $table_name );
 					$primary_key_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_info->get_primary_keys()[0] );
-					$resources[$uri] = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id ) );
+					$row = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id ) );
+					$cbor_map->add_database_row( $zs_uri->__toString(), $row, $table_info );
 					break;
 				case 'bigint_two_tuple_key':
 					if( $db_rows >= $this->max_db_rows_per_response ) {
@@ -190,7 +188,8 @@ class ZS_Sync_Resource_Provider {
 					$table_info = ZS_Sync_Table_Info::for( $table_name );
 					$primary_key_first_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_info->get_primary_keys()[0] );
 					$primary_key_second_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_info->get_primary_keys()[1] );
-					$resources[$uri] = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_first_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id[0] ) . " AND {$primary_key_second_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id[1] ) );
+					$row = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_first_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id[0] ) . " AND {$primary_key_second_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id[1] ) );
+					$cbor_map->add_database_row( $zs_uri->__toString(), $row, $table_info );
 					break;
 				case 'blob_key':
 					if( $db_rows >= $this->max_db_rows_per_response ) {
@@ -201,7 +200,8 @@ class ZS_Sync_Resource_Provider {
 					$table_name_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_name );
 					$table_info = ZS_Sync_Table_Info::for( $table_name );
 					$primary_key_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $table_info->get_primary_keys()[0] );
-					$resources[$uri] = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id ) );
+					$row = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_identifier} = " . ZS_Sync_Mysql_Helper::string_to_safe_expression( $zs_uri->id ) );
+					$cbor_map->add_database_row( $zs_uri->__toString(), $row, $table_info );
 					break;
 				case 'composite_key':
 					if( $db_rows >= $this->max_db_rows_per_response ) {
@@ -217,53 +217,50 @@ class ZS_Sync_Resource_Provider {
 						$primary_key_filter[] = ZS_Sync_Mysql_Helper::schema_object_name_for_query( $primary_key ) . ' = ' . ZS_Sync_Mysql_Helper::string_to_safe_expression( $primary_key_value[ $key ] );
 					}
 					$primary_key_filter = implode( ' AND ', $primary_key_filter );
-					$resources[$uri] = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_filter}" );
+					$row = $wpdb->get_row( "SELECT * FROM {$table_name_identifier} WHERE {$primary_key_filter}" );
+					$cbor_map->add_database_row( $zs_uri->__toString(), $row, $table_info );
 					break;
 				case 'files':
 					if( $file_chunks >= $this->max_file_chunks_per_response ) {
 						continue 2;
 					}
 					$file_chunks++;
-					// Handle file range requests
+
 					$root_path = __DIR__ . '/../tests/fixtures/';
 					$file_path = $root_path . $zs_uri->id;
-					
-					// Get file size
-					$filesize = filesize($file_path);
-					
-					// Default to reading the whole file within max chunk size
-					$start = 0;
-					$length = min($filesize, $this->max_file_chunk_size);
-					
-					// If range is specified in query, use it
-					if (!empty($query) && isset($query['range']) && is_array($query['range'])) {
-						// Check for 'from' key to determine start position
-						if (isset($query['range']['from'])) {
-							$start = (int)$query['range']['from'];
-						}
-						
-						// Check for 'length' key to determine end position
-						if (isset($query['range']['length'])) {
-							$length = min($query['range']['length'], $this->max_file_chunk_size);
-						} else {
-							// If only 'from' is specified, read up to max_file_chunk_size from that position
-							$length = min($filesize - $start, $this->max_file_chunk_size);
-						}
+										
+					// Confirm the file exists
+					if(!file_exists($file_path) || !is_file($file_path)) {
+						// @TODO how to handle a missing file or a non-file?
+						$cbor_map->add_file_chunk( $zs_uri->__toString(), null );
+						continue 2;
 					}
-					
-					// Read the file chunk
+
+					// Default to reading the whole file within max chunk size
+					$start = $resource_query->range_start ?? 0;
+					$length = $resource_query->range_length ?? $this->max_file_chunk_size;
+					$length = min($start + $length, filesize($file_path) - $start);
+
 					$fp = fopen($file_path, 'rb');
-					if ($fp) {
+					if (!$fp) {
+						// @TODO how to handle a file that cannot be opened?
+						$cbor_map->add_file_chunk( $zs_uri->__toString(), null );
+						continue 2;
+					}
+
+					try {
 						fseek($fp, $start);
-						$resources[$uri] = fread($fp, $length);
+						$file_chunk = fread($fp, $length);
+						$cbor_map->add_file_chunk( $zs_uri->__toString(), $file_chunk );
+					} finally {
 						fclose($fp);
-					} else {
-						$resources[$uri] = null;
 					}
 					break;
 			}
 		}
 
-		return $resources;
+		// CBOR-encode the resources
+		$cbor_map = $cbor_map->get_cbor_map();
+		return (string) $cbor_map;
 	}
 }

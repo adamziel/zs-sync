@@ -7,6 +7,8 @@
  * and ensures proper loading order.
  */
 
+require_once __DIR__ . '/vendor/autoload.php';
+
 // Core WordPress polyfills and helpers
 require_once __DIR__ . '/tests/wordpress-polyfills.php';
 require_once __DIR__ . '/functions.php';
@@ -39,7 +41,9 @@ require_once __DIR__ . '/lib/providers/class.zs-sync-resource-provider.php';
 require_once __DIR__ . '/lib/providers/class.zs-sync-uri.php';
 
 // Transfer classes
-require_once __DIR__ . '/lib/transfer/class.zs-sync-request-errors.php';
-require_once __DIR__ . '/lib/transfer/class.zs-sync-request-registry.php';
-require_once __DIR__ . '/lib/transfer/transport/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
-require_once __DIR__ . '/lib/transfer/class.zs-sync-resource-request.php'; 
+require_once __DIR__ . '/lib/providers/class.zs-sync-request-error.php';
+require_once __DIR__ . '/lib/providers/class.zs-sync-resource-list-request.php';
+require_once __DIR__ . '/lib/providers/class.zs-sync-resource-fetch-request.php';
+require_once __DIR__ . '/lib/providers/class.zs-sync-resource-query.php'; 
+require_once __DIR__ . '/lib/providers/class.zs-sync-cbor-encoder.php';
+require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
