@@ -41,5 +41,5 @@ require_once __DIR__ . '/lib/providers/class.zs-sync-uri.php';
 // Transfer classes
 require_once __DIR__ . '/lib/transfer/class.zs-sync-request-errors.php';
 require_once __DIR__ . '/lib/transfer/class.zs-sync-request-registry.php';
-require_once __DIR__ . '/lib/transfer/class.zs-sync-resource-endpoint.php';
+require_once __DIR__ . '/lib/transfer/transport/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
 require_once __DIR__ . '/lib/transfer/class.zs-sync-resource-request.php'; 

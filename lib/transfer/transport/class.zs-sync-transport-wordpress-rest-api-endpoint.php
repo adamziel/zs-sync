@@ -1,11 +1,11 @@
 <?php
 
 /**
- * ZS_Sync_Resource_Endpoint class.
+ * ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint class.
  *
  * @since {WP_VERSION}
  */
-class ZS_Sync_Resource_Endpoint {
+class ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint {
 	/**
 	 * The request registry for resource providers.
 	 *
