@@ -6,19 +6,18 @@
 
 use Pleo\BloomFilter\BloomFilter;
 
-add_filter( 'wp_sync_should_sync_table', 'zs_sync_scanner_table_should_skip_table', 10, 2 );
+add_filter( 'wp_sync_should_sync_table', 'zs_sync_scanner_table_should_sync_table', 10, 2 );
 
-function zs_sync_scanner_table_should_skip_table( $should_skip, $table_name ) {
-	if ( $should_skip ) {
-		return $should_skip;
+function zs_sync_scanner_table_should_sync_table( $should_sync, $table_name ) {
+	if ( $should_sync ) {
+		// Skip all metadata tables
+		global $wpdb;
+		if ( strpos( $table_name, $wpdb->prefix . 'wp_sync_metadata__' ) === 0 ) {
+			return false;
+		}
 	}
 
-	// Skip all metadata tables
-	if ( strpos( $table_name, 'wp_sync_metadata__' ) === 0 ) {
-		return true;
-	}
-
-	return false;
+	return true;
 }
 
 /**
@@ -114,7 +113,7 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		return true;
 	}
 
-	
+
 	
 	/**
 	 * Move to the next table that has a valid primary key and can be processed.
@@ -177,8 +176,8 @@ class ZS_Sync_Scanner_Table implements ZS_Sync_Scanner_Interface {
 		$table_name = $this->cursor['table_name'];
 		
 		// Skip tables that should be filtered out
-		$should_skip_table = apply_filters('wp_sync_should_sync_table', false, $table_name);
-		if ($should_skip_table) {
+		$should_sync_table = apply_filters('wp_sync_should_sync_table', true, $table_name);
+		if (!$should_sync_table) {
 			return false;
 		}
 		

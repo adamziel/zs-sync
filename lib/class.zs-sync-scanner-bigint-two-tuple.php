@@ -63,7 +63,7 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 			ORDER BY $primary_key_first ASC, $primary_key_second ASC
 			LIMIT $max_chunk_size_number";
 
-		$sql = "INSERT INTO wp_sync_metadata__bigint_two_tuple_key (
+		$sql = "INSERT INTO {$wpdb->prefix}wp_sync_metadata__bigint_two_tuple_key (
 				`table_name`, `primary_key_first`, `primary_key_second`, `hash_value`
 			)
 			SELECT 
@@ -74,10 +74,10 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
-					wp_sync_metadata__bigint_two_tuple_key.hash_value is NULL OR 
-					wp_sync_metadata__bigint_two_tuple_key.hash_value != VALUES(hash_value),
+					{$wpdb->prefix}wp_sync_metadata__bigint_two_tuple_key.hash_value is NULL OR 
+					{$wpdb->prefix}wp_sync_metadata__bigint_two_tuple_key.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
-					wp_sync_metadata__bigint_two_tuple_key.hash_value
+					{$wpdb->prefix}wp_sync_metadata__bigint_two_tuple_key.hash_value
 				)";
 
 		$result = $wpdb->query( $sql );
@@ -97,7 +97,7 @@ class ZS_Sync_Scanner_Bigint_Two_Tuple implements ZS_Sync_Scanner_Table_Type {
 		$pairs = $wpdb->get_results($select_query);
 		
 		if (!empty($pairs)) {
-			$sql = "UPDATE wp_sync_metadata__bigint_two_tuple_key 
+			$sql = "UPDATE {$wpdb->prefix}wp_sync_metadata__bigint_two_tuple_key 
 				SET hash_value = NULL 
 				WHERE 
 					hash_value IS NOT NULL 

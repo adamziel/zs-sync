@@ -8,6 +8,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Define default constant if not already defined
+if ( ! defined( 'ZS_SYNC_CRON_SCAN' ) ) {
+	define( 'ZS_SYNC_CRON_SCAN', true );
+}
+
 // Hook for activation
 register_activation_hook( __FILE__, 'zs_sync_schedule_scanning_event' );
 
@@ -54,18 +59,25 @@ function zs_sync_perform_scanning() {
 	
 	if ( empty( $scanners ) ) {
 		// Default scanners if none registered
-		if ( class_exists( 'ZS_Sync_Scanner_Directory' ) ) {
-			$root_path = WP_CONTENT_DIR;
-			$scanners[] = new ZS_Sync_Scanner_Directory(
-				$root_path,
+		if ( class_exists( 'ZS_Sync_Continuous_Scanner' ) ) {
+			$scanners[] = new ZS_Sync_Continuous_Scanner(
 				array( 'max_chunk_size' => $chunk_size )
 			);
-		}
-		
-		if ( class_exists( 'ZS_Sync_Scanner_Table' ) ) {
-			$scanners[] = new ZS_Sync_Scanner_Table(
-				array( 'max_chunk_size' => $chunk_size )
-			);
+		} else {
+			// Fallback to individual scanners if continuous scanner isn't available
+			if ( class_exists( 'ZS_Sync_Scanner_Directory' ) ) {
+				$root_path = WP_CONTENT_DIR;
+				$scanners[] = new ZS_Sync_Scanner_Directory(
+					$root_path,
+					array( 'max_chunk_size' => $chunk_size )
+				);
+			}
+			
+			if ( class_exists( 'ZS_Sync_Scanner_Table' ) ) {
+				$scanners[] = new ZS_Sync_Scanner_Table(
+					array( 'max_chunk_size' => $chunk_size )
+				);
+			}
 		}
 	}
 	

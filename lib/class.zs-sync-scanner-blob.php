@@ -57,7 +57,7 @@ class ZS_Sync_Scanner_Blob implements ZS_Sync_Scanner_Table_Type {
 			ORDER BY $primary_key_identifier ASC
 			LIMIT $max_chunk_size_number";
 
-		$sql = "INSERT INTO wp_sync_metadata__blob_key (
+		$sql = "INSERT INTO {$wpdb->prefix}wp_sync_metadata__blob_key (
 				`table_name`, `primary_key`, `hash_value`
 			)
 			SELECT
@@ -67,10 +67,10 @@ class ZS_Sync_Scanner_Blob implements ZS_Sync_Scanner_Table_Type {
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
-					wp_sync_metadata__blob_key.hash_value is NULL OR 
-					wp_sync_metadata__blob_key.hash_value != VALUES(hash_value),
+					{$wpdb->prefix}wp_sync_metadata__blob_key.hash_value is NULL OR 
+					{$wpdb->prefix}wp_sync_metadata__blob_key.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
-					wp_sync_metadata__blob_key.hash_value
+					{$wpdb->prefix}wp_sync_metadata__blob_key.hash_value
 				)";
 				
 		$result = $wpdb->query( $sql );
@@ -92,7 +92,7 @@ class ZS_Sync_Scanner_Blob implements ZS_Sync_Scanner_Table_Type {
 			$existing_pks_in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($pk);
 		}
 		$existing_pks_in_expression = implode(", ", $existing_pks_in_expression);
-		$sql = "UPDATE wp_sync_metadata__blob_key 
+		$sql = "UPDATE {$wpdb->prefix}wp_sync_metadata__blob_key 
 				SET hash_value = NULL 
 				WHERE hash_value IS NOT NULL 
 				AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table_name);

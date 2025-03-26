@@ -33,7 +33,7 @@ class ZS_Sync_Table_Info {
 
 			// Skip tables that should be filtered out
 			$tables = array_filter($tables, function($table_name) {
-				return ! apply_filters('wp_sync_should_sync_table', false, $table_name);
+				return apply_filters('wp_sync_should_sync_table', true, $table_name);
 			});
 		}
 		
@@ -160,15 +160,16 @@ class ZS_Sync_Table_Info {
 	 * Get the appropriate metadata table name for this table's primary key type
 	 */
 	public function get_sync_metadata_table() {
+		global $wpdb;
 		switch ( $this->primary_key_type ) {
 			case self::PRIMARY_KEY_TYPE_BIGINT:
-				return 'wp_sync_metadata__bigint_key';
+				return $wpdb->prefix . 'wp_sync_metadata__bigint_key';
 			case self::PRIMARY_KEY_TYPE_BLOB:
-				return 'wp_sync_metadata__blob_key';
+				return $wpdb->prefix . 'wp_sync_metadata__blob_key';
 			case self::PRIMARY_KEY_TYPE_BIGINT_TWO_TUPLE:
-				return 'wp_sync_metadata__bigint_two_tuple_key';
+				return $wpdb->prefix . 'wp_sync_metadata__bigint_two_tuple_key';
 			case self::PRIMARY_KEY_TYPE_COMPOSITE:
-				return 'wp_sync_metadata__composite_key';
+				return $wpdb->prefix . 'wp_sync_metadata__composite_key';
 			default:
 				return null;
 		}

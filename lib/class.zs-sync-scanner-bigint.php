@@ -57,7 +57,7 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 			ORDER BY $primary_key_identifier ASC
 			LIMIT $max_chunk_size_number";
 
-		$sql = "INSERT INTO wp_sync_metadata__bigint_key (
+		$sql = "INSERT INTO {$wpdb->prefix}wp_sync_metadata__bigint_key (
 				`table_name`, `primary_key`, `hash_value`
 			)
 			SELECT
@@ -67,10 +67,10 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 			FROM ($select_query) AS sub
 			ON DUPLICATE KEY UPDATE
 				hash_value = IF(
-					wp_sync_metadata__bigint_key.hash_value is NULL OR 
-					wp_sync_metadata__bigint_key.hash_value != VALUES(hash_value),
+					{$wpdb->prefix}wp_sync_metadata__bigint_key.hash_value is NULL OR 
+					{$wpdb->prefix}wp_sync_metadata__bigint_key.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
-					wp_sync_metadata__bigint_key.hash_value
+					{$wpdb->prefix}wp_sync_metadata__bigint_key.hash_value
 				)";
 
 		$result = $wpdb->query( $sql );
@@ -85,7 +85,7 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 		$this->cursor['last_pk'] = $last_processed_pk;
 		
 		// Set hash to null for any deleted resources in the processed range.
-		$sql = "UPDATE wp_sync_metadata__bigint_key 
+		$sql = "UPDATE {$wpdb->prefix}wp_sync_metadata__bigint_key 
 				SET hash_value = NULL 
 				WHERE hash_value IS NOT NULL 
 				AND table_name = " . ZS_Sync_Mysql_Helper::string_to_safe_expression($table_name);

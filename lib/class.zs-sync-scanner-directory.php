@@ -106,7 +106,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		$insert_expression = implode( ",\n", $insert_rows );
 
 		$sql = <<<SQL
-			INSERT INTO wp_sync_metadata__files (
+			INSERT INTO {$wpdb->prefix}wp_sync_metadata__files (
 				`file_path`,
 				`hash_value`,
 				`filesize`
@@ -115,14 +115,14 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 				$insert_expression
 			ON DUPLICATE KEY UPDATE
 				filesize = IF(
-					wp_sync_metadata__files.hash_value is NULL OR wp_sync_metadata__files.hash_value != VALUES(hash_value),
+					{$wpdb->prefix}wp_sync_metadata__files.hash_value is NULL OR {$wpdb->prefix}wp_sync_metadata__files.hash_value != VALUES(hash_value),
 					VALUES(filesize),
-					wp_sync_metadata__files.filesize
+					{$wpdb->prefix}wp_sync_metadata__files.filesize
 				),				
 				hash_value = IF(
-					wp_sync_metadata__files.hash_value is NULL OR wp_sync_metadata__files.hash_value != VALUES(hash_value),
+					{$wpdb->prefix}wp_sync_metadata__files.hash_value is NULL OR {$wpdb->prefix}wp_sync_metadata__files.hash_value != VALUES(hash_value),
 					VALUES(hash_value),
-					wp_sync_metadata__files.hash_value
+					{$wpdb->prefix}wp_sync_metadata__files.hash_value
 				)
 		SQL;
 
@@ -145,7 +145,7 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	private function set_hash_to_null_for_deleted_files( ?string $from_path, ?string $to_path = null): void {
 		global $wpdb;
 
-		$sql = "UPDATE wp_sync_metadata__files 
+		$sql = "UPDATE {$wpdb->prefix}wp_sync_metadata__files 
 				SET hash_value = NULL 
 				WHERE hash_value IS NOT NULL";
 

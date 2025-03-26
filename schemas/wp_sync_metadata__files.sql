@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS wp_sync_metadata__files (
+CREATE TABLE IF NOT EXISTS <prefix>wp_sync_metadata__files (
     /*
      * Windows limits max filepath to 256 characters,
      * and while many filesystems limit the filename
@@ -14,8 +14,11 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__files (
     /*
      * Refers to the most-recent time that this resource was
      * scanned to check for the probability that it's stale.
+     *
+     * Stored with fractional seconds precision to allow more
+     * precise filtering.
      */
-    time_of_last_scan TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    time_of_last_scan TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 
     /*
      * Sized for the CRC32. If a stronger hash is required,

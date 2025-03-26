@@ -14,6 +14,35 @@ class ZS_Sync_URI {
 	}
 
 	/**
+	 * Create a URI object from resource data.
+	 *
+	 * @since {WP_VERSION}
+	 *
+	 * @param string $resource_type The type of resource
+	 * @param string|null $id_type The type of identifier (e.g. table name)
+	 * @param string|null $id The identifier value
+	 * @return ZS_Sync_URI
+	 */
+	public static function from_data( string $resource_type, ?string $id_type = null, ?string $id = null ): ZS_Sync_URI {
+		return new ZS_Sync_URI( $resource_type, $id_type, $id );
+	}
+
+	/**
+	 * Convert the URI to a string representation.
+	 *
+	 * @since {WP_VERSION}
+	 *
+	 * @return string
+	 */
+	public function __toString(): string {
+		return implode( ':', [
+			$this->resource_type,
+			$this->id_type,
+			$this->id,
+		]);
+	}
+
+	/**
 	 * Create a URI object from parsing a string.
 	 *
 	 * @since {WP_VERSION}
@@ -39,11 +68,11 @@ class ZS_Sync_URI {
 			? substr( $uri, $after_type + 1, $after_id_type - $after_type - 1 )
 			: null;
 
-		// Cannot provide an id without indicating its type.
 		if (
 			( $uri_length - $after_id_type > 1 && ! isset( $id_type ) ) ||
 			( $uri_length - $after_id_type === 1 && isset( $id_type ) )
 		) {
+			_doing_it_wrong( __METHOD__, 'Cannot provide an id without indicating its type.', '1.0.0' );
 			return null;
 		}
 

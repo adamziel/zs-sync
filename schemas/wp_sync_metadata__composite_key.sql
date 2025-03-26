@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS wp_sync_metadata__composite_key (
+CREATE TABLE IF NOT EXISTS <prefix>wp_sync_metadata__composite_key (
     /* Refers to the table where this row is found. */
     table_name CHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
 
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS wp_sync_metadata__composite_key (
      * Refers to the most-recent time that this resource was
      * scanned to check for the probability that it’s stale.
      */
-    time_of_last_scan TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    time_of_last_scan TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 
     /*
      * Sized for the CRC32. If a stronger hash is required,
