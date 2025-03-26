@@ -33,7 +33,7 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	 * @return array|WP_Error Array of resources on success, WP_Error on failure.
 	 */
 	public function list_resources( ZS_Sync_Resource_List_Request $request ): ZS_Sync_Response_Error|array {
-		$url = $this->base_url . '/wp-json/zs-sync/v1/resources/list';
+		$url = $this->base_url . '/list';
 		$response = wp_remote_post( $url, [
 			'method' => 'POST',
 			'headers' => [
@@ -43,7 +43,7 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 		] );
 		
 		if ( is_wp_error( $response ) ) {
-			return $response;
+			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $response->get_error_message() );
 		}
 		
 		$status_code = wp_remote_retrieve_response_code( $response );
@@ -70,7 +70,7 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	 * @return string|WP_Error CBOR-encoded string of resources on success, WP_Error on failure.
 	 */
 	public function get_resources( ZS_Sync_Resource_Fetch_Request $request ): ZS_Sync_Response_Error|CBOR\MapObject {
-		$url = $this->base_url . '/wp-json/zs-sync/v1/resources/fetch';
+		$url = $this->base_url . '/fetch';
 		$response = wp_remote_post( $url, [
 			'method' => 'POST',
 			'headers' => [

@@ -81,4 +81,24 @@ class ZS_Sync_Resource_List_Request {
 		return $request;
 	}
 
+	/**
+	 * Convert the request to a JSON string
+	 * 
+	 * @return string JSON representation of the request
+	 */
+	public function to_json_string(): string {
+		$data = [];
+		
+		if ($this->since_version !== null) {
+			$data['since_version'] = $this->since_version;
+		}
+		
+		if ($this->limit !== 100) {
+			$data['limit'] = $this->limit;
+		}
+		
+		return json_encode($data);
+	}
+
+
 }

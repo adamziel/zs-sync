@@ -4,12 +4,15 @@ use CBOR\MapObject;
 use CBOR\TextStringObject;
 use CBOR\ByteStringObject;
 use CBOR\ListObject;
+use CBOR\NegativeIntegerObject;
 use CBOR\UnsignedIntegerObject;
 use CBOR\OtherObject\TrueObject;
 use CBOR\OtherObject\FalseObject;
 use CBOR\OtherObject\NullObject;
 use CBOR\Tag\DecimalFractionTag;
+use CBOR\Tag\NegativeBigIntegerTag;
 use CBOR\Tag\TimestampTag;
+use CBOR\Tag\UnsignedBigIntegerTag;
 
 class ZS_Sync_CBOR_Resource_Encoder {
 
@@ -43,11 +46,19 @@ class ZS_Sync_CBOR_Resource_Encoder {
 				} elseif (stripos($type, 'DATE') !== false || stripos($type, 'TIME') !== false) {
 					// Convert date/time to timestamp tag
 					$ts = (new DateTime($val))->getTimestamp();
-					$list->add(TimestampTag::create(UnsignedIntegerObject::create($ts)));
+					if($ts >= 0) {
+						$list->add(UnsignedBigIntegerTag::create(ByteStringObject::create((string)$ts)));
+					} else {
+						$list->add(NegativeBigIntegerTag::create(ByteStringObject::create((string)$ts)));
+					}
 				} else {
 					// For other values, convert based on PHP type
 					if (is_int($val) || ctype_digit($val)) {
-						$list->add(UnsignedIntegerObject::create((int)$val));
+						if($val >= 0) {
+							$list->add(UnsignedBigIntegerTag::create(ByteStringObject::create((string)$val)));
+						} else {
+							$list->add(NegativeBigIntegerTag::create(ByteStringObject::create((string)$val)));
+						}
 					} elseif (is_string($val)) {
 						$list->add(ByteStringObject::create($val));
 					} elseif (is_bool($val)) {

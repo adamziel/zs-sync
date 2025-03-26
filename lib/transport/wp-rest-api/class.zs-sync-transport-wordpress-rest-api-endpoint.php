@@ -65,8 +65,9 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint {
 	 * @return bool|WP_Error True if the request has permission, WP_Error otherwise.
 	 */
 	public function check_permission( $request ) {
-		// Only allow authenticated users with appropriate capabilities
-		return current_user_can( 'manage_options' );
+		// For now, allow all requests
+		// @TODO: Secure site<->site authorization
+		return true;
 	}
 
 	/**
@@ -110,10 +111,16 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint {
 		
 		$resources_cbor = $this->resource_provider->get_resources( $resource_request );
 		if ( $resources_cbor instanceof ZS_Sync_Request_Error ) {
-			return new WP_REST_Response( $resources_cbor, $resources_cbor->code );
+			return new WP_REST_Response( $resources_cbor->__toString(), $resources_cbor->code );
 		}
 
-		return new WP_REST_Response( $resources_cbor, 200 );
+		// Not using WP_REST_Response because it wraps the string in quotes, presumably
+		// encoding it as JSON.
+		// @TODO: Figure out why this is happening.
+		http_response_code(200);
+		header('Content-Type: application/cbor');
+		echo $resources_cbor;
+		die();
 	}		
 
 }

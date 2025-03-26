@@ -228,11 +228,11 @@ class ZS_Sync_Resource_Provider {
 					break;
 				case 'files':
 					if( $file_chunks >= $this->max_file_chunks_per_response ) {
-						continue 2;
+						// continue 2;
 					}
 					$file_chunks++;
 
-					$root_path = __DIR__ . '/../tests/fixtures/';
+					$root_path = __DIR__ . '/../../tests/fixtures/';
 					$file_path = $root_path . $zs_uri->id;
 										
 					// Confirm the file exists
@@ -246,11 +246,14 @@ class ZS_Sync_Resource_Provider {
 					$start = $resource_query->range_start ?? 0;
 					$length = $resource_query->range_length ?? $this->max_file_chunk_size;
 					$length = min($start + $length, filesize($file_path) - $start);
+					if($length <= 0) {
+						continue 2;
+					}
 
 					$fp = fopen($file_path, 'rb');
 					if (!$fp) {
 						// @TODO how to handle a file that cannot be opened?
-						$cbor_map->add_file_chunk( $zs_uri->__toString(), null );
+						// $cbor_map->add_file_chunk( $zs_uri->__toString(), null );
 						continue 2;
 					}
 
@@ -267,7 +270,7 @@ class ZS_Sync_Resource_Provider {
 
 		// CBOR-encode the resources
 		$cbor_map = $cbor_map->get_cbor_map();
-		return (string) $cbor_map;
+		return $cbor_map->__toString();
 	}
 
 	static public function parse_get_resources_response( string $response ): CBOR\MapObject {
@@ -285,8 +288,8 @@ class ZS_Sync_Resource_Provider {
 		$tagManager = Tag\TagManager::create()
 			->add(Tag\DatetimeTag::class)
 			->add(Tag\TimestampTag::class)
-			->add(Tag\UnsignedBigIntegerTag::class)
 			->add(Tag\NegativeBigIntegerTag::class)
+			->add(Tag\UnsignedBigIntegerTag::class)
 			->add(Tag\DecimalFractionTag::class)
 			->add(Tag\BigFloatTag::class)
 			->add(Tag\Base64UrlEncodingTag::class)
