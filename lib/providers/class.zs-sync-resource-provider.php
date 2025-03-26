@@ -118,7 +118,7 @@ class ZS_Sync_Resource_Provider {
 				FROM {$wpdb->prefix}wp_sync_metadata__files)
 			) AS sub
 
-			WHERE true $scan_timestamp_filter
+			WHERE true $scan_timestamp_filter 
 			-- Stable ordering. If the hash_value changes, the time_of_last_scan will also change.
 			ORDER BY time_of_last_scan ASC, table_name ASC, hash_value ASC
 			LIMIT $limit
@@ -245,7 +245,7 @@ class ZS_Sync_Resource_Provider {
 					// Default to reading the whole file within max chunk size
 					$start = $resource_query->range_start ?? 0;
 					$length = $resource_query->range_length ?? $this->max_file_chunk_size;
-					$length = min($start + $length, filesize($file_path) - $start);
+					$length = min($length, filesize($file_path) - $start);
 					if($length <= 0) {
 						continue 2;
 					}

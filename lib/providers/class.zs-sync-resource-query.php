@@ -39,7 +39,7 @@ class ZS_Sync_Resource_Query {
 
 	public function get_raw_data(): string|array {
 		$data = [
-			'uri' => $this->uri,
+			'uri' => $this->uri->__toString(),
 		];
 		if($this->range_start !== null) {
 			$data['range'] = [

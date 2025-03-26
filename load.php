@@ -127,3 +127,4 @@ require_once __DIR__ . '/lib/providers/class.zs-sync-cbor-encoder.php';
 require_once __DIR__ . '/lib/transport/interface.zs-sync-client.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-client.php';
+require_once __DIR__ . '/lib/client/class.zs-sync-file-downloader.php';

@@ -26,6 +26,15 @@ $remote_site_url = 'http://127.0.0.1:5324/index.php?rest_route=%2Fzs-sync%2Fv1%2
 try {
     // Create client instance for the remote site
     $client = new ZS_Sync_Transport_Wordpress_Rest_Api_Client($remote_site_url);
+	$resources = $client->list_resources( ZS_Sync_Resource_List_Request::from_array([]) );
+
+	$downloader = new ZS_Sync_File_Downloader( $client, [
+		'temp_dir' => __DIR__ . '/temp',
+	] );
+	var_dump( $downloader->fetch_files( [
+		$resources[2],
+	] ) );
+	die();
 
     // Configure import options
     $import_options = [

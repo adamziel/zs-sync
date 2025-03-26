@@ -53,8 +53,8 @@ class ZS_Sync_Resource_List_Request {
 		
 		if (isset($request_data['since_version'])) {
 			if (!is_array($request_data['since_version']) || 
-				!isset($request_data['since_version']['time_of_last_scan']) || 
-				!isset($request_data['since_version']['hash_value'])) {
+				!array_key_exists('time_of_last_scan', $request_data['since_version']) || 
+				!array_key_exists('hash_value', $request_data['since_version'])) {
 				return ZS_Sync_Request_Error::create(
 					ZS_Sync_Request_Error::BAD_REQUEST,
 					'The since_version parameter must be an array with "time_of_last_scan" and "hash_value" keys.'

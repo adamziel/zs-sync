@@ -94,6 +94,7 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	}
 
 	
+	
 	/**
 	 * Process CBOR response into PHP objects.
 	 * 
