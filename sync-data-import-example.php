@@ -28,14 +28,6 @@ try {
     $client = new ZS_Sync_Transport_Wordpress_Rest_Api_Client($remote_site_url);
 	$resources = $client->list_resources( ZS_Sync_Resource_List_Request::from_array([]) );
 
-	$downloader = new ZS_Sync_File_Downloader( $client, [
-		'temp_dir' => __DIR__ . '/temp',
-	] );
-	var_dump( $downloader->fetch_files( [
-		$resources[2],
-	] ) );
-	die();
-
     // Configure import options
     $import_options = [
         'files_output_dir' => './received-files',  // Where to save received files
@@ -104,6 +96,8 @@ class ZS_Sync_Data_Importer {
 	 */
 	private $next_version = null;
 
+	private $pdo;
+
 	/**
 	 * Constructor
 	 *
@@ -129,6 +123,8 @@ class ZS_Sync_Data_Importer {
 		if ( ! file_exists( $this->csv_output_dir ) ) {
 			mkdir( $this->csv_output_dir, 0755, true );
 		}
+
+		$this->pdo = new PDO('sqlite:' . __DIR__ . '/temp/zs-sync.db');
 	}
 
 	/**
@@ -171,20 +167,55 @@ class ZS_Sync_Data_Importer {
 				];
 			}
 
-			// Process the resources in batches to avoid memory issues
-			$batch_size = 10;
-			$batches    = array_chunk( $resources_list, $batch_size );
-			foreach ( $batches as $batch ) {
-				$result = $this->process_resource_batch( $batch );
-
-				// Update stats
-				$stats['tables_processed'] += $result['tables_processed'];
-				$stats['rows_processed']   += $result['rows_processed'];
-				$stats['files_processed']  += $result['files_processed'];
-
-				if ( ! empty( $result['errors'] ) ) {
-					$stats['errors'] = array_merge( $stats['errors'], $result['errors'] );
+			// Fetch the files first
+			$file_resources = [];
+			foreach($resources_list as $resource) {
+				if (!isset($resource['type']) || $resource['type'] !== 'files') {
+					continue;
 				}
+				if($resource['is_directory']) {
+					if(null === $resource['hash_value']) {
+						rmdir($this->files_output_dir . '/' . $resource['file_path']);
+					} elseif(!is_dir($this->files_output_dir . '/' . $resource['file_path'])) {
+						mkdir($this->files_output_dir . '/' . $resource['file_path']);
+					}
+					continue;
+				}
+				if(null === $resource['hash_value']) {
+					$this->delete_file($resource['uri']);
+					continue;
+				}
+				$file_resources[] = $resource;
+			}
+			echo "Downloading " . count($file_resources) . " resources...\n";
+			
+			$downloader = new ZS_Sync_File_Downloader($this->client, [
+				'temp_dir' => __DIR__ . '/temp',
+				'chunk_size' => 2
+			]);
+			
+			$download_results = $downloader->fetch_files($file_resources);
+			
+			// Log any download errors
+			foreach ($download_results as $uri => $result) {
+				if (!$result['success']) {
+					$stats['errors'][] = "Failed to download file {$uri}: " . $result['error'];
+				}
+			}
+
+			// The fetch the rest of the resources and process them
+			$database_resources = array_filter($resources_list, function($resource) {
+				return isset($resource['type']) && $resource['type'] !== 'files';
+			});
+			$result = $this->process_database_records( $database_resources );
+
+			// Update stats
+			$stats['tables_processed'] += $result['tables_processed'];
+			$stats['rows_processed']   += $result['rows_processed'];
+			$stats['files_processed']  += $result['files_processed'];
+
+			if ( ! empty( $result['errors'] ) ) {
+				$stats['errors'] = array_merge( $stats['errors'], $result['errors'] );
 			}
 
 			// Determine if there's more to fetch
@@ -218,7 +249,7 @@ class ZS_Sync_Data_Importer {
 	 *
 	 * @return array Processing statistics
 	 */
-	private function process_resource_batch( $resources ) {
+	private function process_database_records( $resources ) {
 		$stats = [
 			'tables_processed'      => 0,
 			'rows_processed'        => 0,
@@ -256,21 +287,9 @@ class ZS_Sync_Data_Importer {
 				$value  = $entry->getValue();
 
 				if ( $value instanceof NullObject ) {
-					// @TODO: Delete the local resource if it wasn't updated since the last sync
-					continue;
-				}
-
-				switch ( $zs_uri->resource_type ) {
-					case 'files':
-						$this->save_file( $zs_uri, $value->getValue() );
-						$stats['files_processed'] ++;
-						break;
-					case 'blob_key':
-					case 'bigint_key':
-					case 'composite_key':
-					case 'bigint_two_tuple_key':
-						$this->save_table_row( $zs_uri->id_type, $value );
-						break;
+					$this->delete_table_row( $zs_uri->id_type, $value );
+				} else {
+					$this->save_table_row( $zs_uri->id_type, $value );
 				}
 				// $stats['rows_processed'] ++;
 
@@ -294,80 +313,91 @@ class ZS_Sync_Data_Importer {
 	}
 
 	/**
-	 * Save a file to the local filesystem
-	 *
-	 * @param  ZS_Sync_URI  $uri  Resource URI
-	 * @param  string  $data  Binary file data
-	 */
-	private function save_file( ZS_Sync_URI $uri, $data ) {
-		// Get the file path from the URI
-		$file_path = $uri->id;
-
-		// Prepare the local path
-		$local_path = $this->files_output_dir . '/' . $file_path;
-
-		// Create directory structure if needed
-		$dir = dirname( $local_path );
-		if ( ! file_exists( $dir ) ) {
-			mkdir( $dir, 0755, true );
-		}
-
-		// Write the file
-		file_put_contents( $local_path, $data );
-	}
-
-	/**
-	 * Save table row data to CSV
+	 * Save table row data to SQLite database
 	 *
 	 * @param  string  $table_name  Name of the table
 	 * @param  array  $data  Row data from CBOR response
 	 */
 	private function save_table_row( $table_name, $data ) {
-		$csv_path = $this->csv_output_dir . '/' . $table_name . '.csv';
-
-		// Check if this is a new table (need to create CSV with headers)
-		$is_new_table = ! isset( $this->processed_tables[ $table_name ] );
-
-		// Open the CSV file in append mode
-		$file_handle = fopen( $csv_path, $is_new_table ? 'w' : 'a' );
-
+		// Ensure the key/value table exists
+		$this->ensure_kv_table_exists();
+		
 		$table_info = ZS_Sync_Table_Info::for( $table_name );
-
-		// If this is a new table, write the headers
-		if ( $is_new_table ) {
-			// For a new table, we need to determine the column names
-			// We'll use the keys from the Table_Info if available, or create columns with generic names
-			$headers = [];
-			for ( $i = 0; $i < count( $data ); $i ++ ) {
-				$headers[] = array_values($table_info->get_fields())[ $i ]->Field;
-			}
-
-			fputcsv( $file_handle, $headers, ',', '"', '\\' );
-			$this->processed_tables[ $table_name ] = $headers;
-		}
-
-		// Convert CBOR data to PHP values for CSV
+		
+		// Convert CBOR data to PHP values
 		$row_data = [];
 		foreach ( $data as $value ) {
 			if ( $value === null ) {
 				$row_data[] = '';
 			} elseif ( $value instanceof NegativeBigIntegerTag || $value instanceof UnsignedBigIntegerTag ) {
-				$row_data[] = $value->getValue()->getValue();
+				$row_data[] = $value->getValue();
 			} elseif ( $value instanceof ByteStringObject || $value instanceof TextStringObject || $value instanceof UnsignedIntegerObject ) {
 				$row_data[] = $value->getValue();
 			} elseif ( $value instanceof NullObject ) {
 				$row_data[] = '';
 			} elseif ( $value instanceof TimestampTag ) {
-				$row_data[] = $value->getValue()->getValue();
+				$row_data[] = $value->getValue();
 			} else {
 				$row_data[] = $value;
 			}
 		}
+		
+		// Create a unique key for this table row
+		$key = $table_name . '_' . md5(serialize($row_data));
+		$value = json_encode([
+			'table' => $table_name,
+			'data' => $row_data
+		]);
+		
+		// Insert or update the row in the key/value table
+		$stmt = $this->pdo->prepare("INSERT OR REPLACE INTO kv_store (key_name, value_data) VALUES (?, ?)");
+		$stmt->execute([$key, $value]);
+	}
+	
+	/**
+	 * Delete table row data from SQLite database
+	 *
+	 * @param  string  $table_name  Name of the table
+	 * @param  mixed  $data  Data identifying the row to delete
+	 */
+	private function delete_table_row( $table_name, $data ) {
+		// Ensure the key/value table exists
+		$this->ensure_kv_table_exists();
+		
+		// Delete all rows for this table
+		$stmt = $this->pdo->prepare("DELETE FROM kv_store WHERE key_name LIKE ?");
+		$stmt->execute([$table_name . '_%']);
+	}
+	
+	/**
+	 * Ensure the key/value table exists in SQLite database
+	 */
+	private function ensure_kv_table_exists() {
+		// Check if the table already exists
+		$stmt = $this->pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'");
+		$table_exists = $stmt->fetch();
+		
+		if (!$table_exists) {
+			// Create the key/value table
+			$this->pdo->exec("
+				CREATE TABLE kv_store (
+					key_name TEXT PRIMARY KEY,
+					value_data TEXT,
+					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+			");
+			
+			// Create an index for faster lookups
+			$this->pdo->exec("CREATE INDEX idx_key_name ON kv_store (key_name)");
+		}
+	}
 
-		// Write the row to the CSV file
-		fputcsv( $file_handle, $row_data, ',', '"', '\\' );
-
-		// Close the file
-		fclose( $file_handle );
+	private function delete_file( $uri_string ) {
+		$uri = ZS_Sync_URI::from_string( $uri_string );
+		$file_path = $uri->id;
+		$local_path = $this->files_output_dir . '/' . $file_path;
+		if ( file_exists( $local_path ) ) {
+			unlink( $local_path );
+		}
 	}
 }

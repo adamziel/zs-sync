@@ -150,6 +150,8 @@ class ZS_Sync_Resource_Provider {
 					$resource_data['file_path'] = $item->primary_key;
 					$resource_data['filesize'] = (int) $item->filesize;
 					$resource_data['uri'] = ZS_Sync_URI::from_data( $item->table_type, 'path', $item->primary_key )->__toString();
+					// @TODO configurable root path
+					$resource_data['is_directory'] = is_dir(__DIR__ . '/../../tests/fixtures/' . $item->primary_key);
 					break;
 			}
 

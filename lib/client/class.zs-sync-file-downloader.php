@@ -57,17 +57,26 @@ class ZS_Sync_File_Downloader {
 
 		foreach ( $file_resources as $resource ) {
 			// Validate required fields
-			if ( empty( $resource['uri'] ) || empty( $resource['file_path'] ) || empty( $resource['filesize'] ) ) {
+			if ( empty( $resource['uri'] ) || !array_key_exists('filesize', $resource) ) {
 				$results[$resource['uri']] = [
 					'success' => false,
-					'error' => 'Missing required metadata (uri, file_path, or filesize)',
+					'error' => 'Missing required metadata (uri or filesize)',
 				];
 				continue;
 			}
 
 			$uri = $resource['uri'];
-			$file_path = $resource['file_path'];
 			$filesize = (int) $resource['filesize'];
+			
+			// Get file_path from uri
+			$file_path = $this->get_file_path_from_uri($uri);
+			if (empty($file_path)) {
+				$results[$uri] = [
+					'success' => false,
+					'error' => 'Could not determine file path from URI',
+				];
+				continue;
+			}
 			
 			// Create a file-specific temp directory
 			$file_temp_dir = $this->temp_dir . '/' . md5( $uri );
@@ -190,6 +199,20 @@ class ZS_Sync_File_Downloader {
 	}
 	
 	/**
+	 * Extracts the file path from a URI
+	 *
+	 * @param string $uri The URI of the file resource
+	 * @return string The file path
+	 */
+	private function get_file_path_from_uri($uri) {
+		$zs_uri = ZS_Sync_URI::from_string($uri);
+		if ($zs_uri && $zs_uri->resource_type === 'files') {
+			return $zs_uri->id;
+		}
+		return '';
+	}
+	
+	/**
 	 * Assembles chunks into a final file
 	 *
 	 * @param string $file_temp_dir The temporary directory containing chunks
@@ -210,7 +233,9 @@ class ZS_Sync_File_Downloader {
 			}
 		}
 		
-		// Open the output file
+		// Truncate the file to 0 bytes before writing to it
+		file_put_contents($file_path, '');
+		
 		$output_file = fopen( $file_path, 'wb' );
 		if ( ! $output_file ) {
 			return [
