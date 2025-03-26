@@ -84,4 +84,14 @@ class ZS_Sync_Resource_Fetch_Request {
 		$this->resources = $resource_queries;
 	}
 
+	public function to_json_string(): string {
+		$resources_data = [];
+		foreach($this->resources as $resource) {
+			$resources_data[] = $resource->get_raw_data();
+		}
+		return json_encode([
+			'resources' => $resources_data
+		]);
+	}
+
 }

@@ -1,5 +1,11 @@
 <?php
 
+use CBOR\Decoder;
+use CBOR\StringStream;
+use CBOR\OtherObject;
+use CBOR\Tag;
+
+
 class ZS_Sync_Resource_Provider {
 	/**
 	 * @var int The maximum size of file chunks to read, in bytes
@@ -263,4 +269,38 @@ class ZS_Sync_Resource_Provider {
 		$cbor_map = $cbor_map->get_cbor_map();
 		return (string) $cbor_map;
 	}
+
+	static public function parse_get_resources_response( string $response ): CBOR\MapObject {
+		$otherObjectManager = OtherObject\OtherObjectManager::create()
+			->add(OtherObject\SimpleObject::class)
+			->add(OtherObject\FalseObject::class)
+			->add(OtherObject\TrueObject::class)
+			->add(OtherObject\NullObject::class)
+			->add(OtherObject\UndefinedObject::class)
+			->add(OtherObject\HalfPrecisionFloatObject::class)
+			->add(OtherObject\SinglePrecisionFloatObject::class)
+			->add(OtherObject\DoublePrecisionFloatObject::class)
+		;
+
+		$tagManager = Tag\TagManager::create()
+			->add(Tag\DatetimeTag::class)
+			->add(Tag\TimestampTag::class)
+			->add(Tag\UnsignedBigIntegerTag::class)
+			->add(Tag\NegativeBigIntegerTag::class)
+			->add(Tag\DecimalFractionTag::class)
+			->add(Tag\BigFloatTag::class)
+			->add(Tag\Base64UrlEncodingTag::class)
+			->add(Tag\Base64EncodingTag::class)
+			->add(Tag\Base16EncodingTag::class)
+		;
+
+		$decoder = Decoder::create($tagManager, $otherObjectManager);
+
+		// Load and decode the CBOR data
+		$stream = StringStream::create($response);
+		$result = $decoder->decode($stream);
+
+		return $result;
+	}
+
 }
