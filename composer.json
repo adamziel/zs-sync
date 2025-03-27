@@ -1,0 +1,21 @@
+{
+    "name": "zs-sync/zs-sync",
+    "require": {
+        "spomky-labs/cbor-php": "^3.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "ZsSync\\ZsSync\\": "src/"
+        }
+    },
+    "authors": [
+		{
+			"name": "Dennis Snell",
+			"email": "dennis.snell@automattic.com"
+		},
+        {
+            "name": "Adam Zieliński",
+            "email": "adam@adamziel.com"
+        }
+    ]
+}
