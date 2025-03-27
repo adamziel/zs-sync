@@ -37,4 +37,14 @@ add_action( 'rest_api_init', 'init' );
 
 // Transplanted parts from the php-toolkit repo
 
+add_action( 'doing_it_wrong_run', function ( $fn, $message, $version ) {
+	try {
+		throw new Exception( $message );
+	} catch ( Exception $e ) {
+		echo $e->getMessage();
+		echo $e->getTraceAsString();
+		die('Doing it wrong');
+	}
+}, 10, 3 );
+
 

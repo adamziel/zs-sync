@@ -173,6 +173,31 @@ class ZS_Sync_Resource_Provider {
 			$zs_uri = $resource_query->uri;
 			
 			switch ( $zs_uri->resource_type ) {
+				case 'create_table':
+					$table_name = $zs_uri->id_type;
+					$table_name_identifier = ZS_Sync_Mysql_Helper::schema_object_name_for_query($table_name);
+					$create_table_query = $wpdb->get_var("SHOW CREATE TABLE {$table_name_identifier}");
+					
+					if ($create_table_query) {
+						// Extract the CREATE TABLE statement from the result
+						// SHOW CREATE TABLE returns a row with two columns: Table and Create Table
+						if (is_array($create_table_query)) {
+							$create_table_query = $create_table_query[1]; // Get the second column
+						} elseif (strpos($create_table_query, 'CREATE TABLE') === false) {
+							// If we got a string but it doesn't contain CREATE TABLE, try to get it directly
+							$create_table_result = $wpdb->get_row("SHOW CREATE TABLE {$table_name_identifier}", ARRAY_N);
+							if ($create_table_result && isset($create_table_result[1])) {
+								$create_table_query = $create_table_result[1];
+							}
+						}
+						
+						// Add the create table statement to the CBOR response
+						$cbor_map->add_byte_string($zs_uri->__toString(), $create_table_query);
+					} else {
+						// Table doesn't exist or error occurred
+						$cbor_map->add_null($zs_uri->__toString());
+					}
+					break;
 				case 'bigint_key':
 					if( $db_rows >= $this->max_db_rows_per_response ) {
 						// @TODO: Stop processing and return an error?

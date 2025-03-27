@@ -55,11 +55,13 @@ class ZS_Sync_URI {
 
 		$after_type = strpos( $uri, ':' );
 		if ( false === $after_type || 0 === $after_type) {
+			_doing_it_wrong( __METHOD__, 'Cannot parse URI: ' . $uri, '1.0.0' );
 			return null;
 		}
 
 		$after_id_type = strpos( $uri, ':', min( $after_type + 1, $uri_length ) );
 		if ( false === $after_id_type ) {
+			_doing_it_wrong( __METHOD__, 'Cannot parse URI: ' . $uri, '1.0.0' );
 			return null;
 		}
 

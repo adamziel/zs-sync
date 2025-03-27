@@ -172,6 +172,22 @@ class ZS_Sync_Mysql_Helper {
 		}
 	}
 
+	public static function to_safe_expression($input) {
+		if(is_string($input)) {
+			return self::string_to_safe_expression($input);
+		}
+		if(is_numeric($input)) {
+			return $input;
+		}
+		if(is_null($input)) {
+			return 'NULL';
+		}
+		if(is_bool($input)) {
+			return $input ? 'TRUE' : 'FALSE';
+		}
+		throw new Exception('Cannot convert data type to a safe MySQL expression: ' . gettype($input));
+	}
+
 	/**
 	 * Transforms a string to a MySQL expression that can be safely
 	 * concatenated with the rest of the query.

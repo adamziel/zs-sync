@@ -97,6 +97,7 @@ class ZS_Sync_Data_Importer {
 	private $next_version = null;
 
 	private $pdo;
+	private $existing_tables = [];
 
 	/**
 	 * Constructor
@@ -124,7 +125,11 @@ class ZS_Sync_Data_Importer {
 			mkdir( $this->csv_output_dir, 0755, true );
 		}
 
-		$this->pdo = new PDO('sqlite:' . __DIR__ . '/temp/zs-sync.db');
+		$this->pdo = new PDO('mysql:host=127.0.0.1', 'root', 'my-secret-pw');
+		$this->pdo->query("CREATE DATABASE IF NOT EXISTS zs_sync_target");
+		$this->pdo->query("USE zs_sync_target");
+		$this->pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
+		$this->existing_tables = $this->pdo->query("SHOW TABLES")->fetchAll(PDO::FETCH_COLUMN);
 	}
 
 	/**
@@ -275,7 +280,7 @@ class ZS_Sync_Data_Importer {
 		}
 
 		// Process the CBOR data
-		try {
+		// try {
 			// Since we don't know the exact structure of the CBOR object,
 			// we'll try to handle it in a way that doesn't depend on specific methods
 			$processedResources = 0;
@@ -305,9 +310,9 @@ class ZS_Sync_Data_Importer {
 				// We didn't process any resources, which might indicate an issue with the response format
 				$stats['errors'][] = "Warning: No resources were processed from the response.";
 			}
-		} catch ( Exception $e ) {
-			$stats['errors'][] = "Error processing CBOR data: " . $e->getMessage();
-		}
+		// } catch ( Exception $e ) {
+		// 	$stats['errors'][] = "Error processing CBOR data: " . $e->getMessage();
+		// }
 
 		return $stats;
 	}
@@ -319,39 +324,78 @@ class ZS_Sync_Data_Importer {
 	 * @param  array  $data  Row data from CBOR response
 	 */
 	private function save_table_row( $table_name, $data ) {
-		// Ensure the key/value table exists
-		$this->ensure_kv_table_exists();
-		
-		$table_info = ZS_Sync_Table_Info::for( $table_name );
+		// If the table doesn't exist, create it
+		if ( ! in_array( $table_name, $this->existing_tables ) ) {
+			$resource_uri = 'create_table:' . $table_name.':-';
+			$response = $this->client->get_resources( ZS_Sync_Resource_Fetch_Request::from_array([
+				'resources' => [
+					$resource_uri,
+				],
+			]) );
+			$create_table = $response->get( $resource_uri )->getValue();
+			// var_dump($create_table);
+			$this->pdo->query( $create_table );
+			$this->existing_tables[] = $table_name;
+		}
 		
 		// Convert CBOR data to PHP values
 		$row_data = [];
 		foreach ( $data as $value ) {
-			if ( $value === null ) {
-				$row_data[] = '';
-			} elseif ( $value instanceof NegativeBigIntegerTag || $value instanceof UnsignedBigIntegerTag ) {
-				$row_data[] = $value->getValue();
+			if ( $value instanceof NegativeBigIntegerTag || $value instanceof UnsignedBigIntegerTag ) {
+				$row_data[] = (int)$value->getValue()->getValue();
 			} elseif ( $value instanceof ByteStringObject || $value instanceof TextStringObject || $value instanceof UnsignedIntegerObject ) {
-				$row_data[] = $value->getValue();
-			} elseif ( $value instanceof NullObject ) {
-				$row_data[] = '';
-			} elseif ( $value instanceof TimestampTag ) {
-				$row_data[] = $value->getValue();
+				$row_data[] = ZS_Sync_MySQL_Helper::to_safe_expression($value->getValue());
+			} elseif ( $value instanceof NullObject || $value === null ) {
+				$row_data[] = 'NULL';
 			} else {
-				$row_data[] = $value;
+				$row_data[] = ZS_Sync_MySQL_Helper::to_safe_expression($value);
 			}
 		}
+		// print_r($row_data);
+		$table_identifier = ZS_Sync_MySQL_Helper::schema_object_name_for_query( $table_name );
 		
-		// Create a unique key for this table row
-		$key = $table_name . '_' . md5(serialize($row_data));
-		$value = json_encode([
-			'table' => $table_name,
-			'data' => $row_data
-		]);
+		// Build the INSERT ... ON DUPLICATE KEY UPDATE query. We'll be running this
+		// with $wpdb in the future.
+		$columns = $this->get_table_columns( $table_name );
+		$sql = "INSERT INTO $table_identifier (" . implode(', ', $columns) . ")
+				VALUES (" . implode(', ', $row_data) . ")
+				ON DUPLICATE KEY UPDATE ";
+
+
 		
-		// Insert or update the row in the key/value table
-		$stmt = $this->pdo->prepare("INSERT OR REPLACE INTO kv_store (key_name, value_data) VALUES (?, ?)");
-		$stmt->execute([$key, $value]);
+		// Add the update part for each column
+		$updates = [];
+		foreach ($columns as $column) {
+			$updates[] = "$column = VALUES($column)";
+		}
+		$sql .= implode(', ', $updates);
+		// Prepare and execute the statement
+		try {
+			$this->pdo->exec($sql);
+		} catch (PDOException $e) {
+			// Log the error but continue processing
+			error_log("Error upserting data into $table_name: " . $e->getMessage());
+		}
+	}
+
+	/**
+	 * Temporary method to be replaced by ZS_Sync_Table_Info call. Only used
+	 * because we initiate a second PDO connection to another database.
+	 */
+	private function get_table_columns( $table_name ) {
+		$columns = [];
+		try {
+			$stmt = $this->pdo->query("DESCRIBE $table_name");
+			if ($stmt) {
+				while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+					$columns[] = ZS_Sync_MySQL_Helper::schema_object_name_for_query( $row['Field'] );
+				}
+			}
+		} catch (PDOException $e) {
+			// Log the error but continue processing
+			error_log("Error getting columns for $table_name: " . $e->getMessage());
+		}
+		return $columns;
 	}
 	
 	/**
@@ -361,36 +405,14 @@ class ZS_Sync_Data_Importer {
 	 * @param  mixed  $data  Data identifying the row to delete
 	 */
 	private function delete_table_row( $table_name, $data ) {
-		// Ensure the key/value table exists
-		$this->ensure_kv_table_exists();
-		
 		// Delete all rows for this table
-		$stmt = $this->pdo->prepare("DELETE FROM kv_store WHERE key_name LIKE ?");
-		$stmt->execute([$table_name . '_%']);
+		$table_identifier = ZS_Sync_MySQL_Helper::schema_object_name_for_query( $table_name );
+		// var_dump($data);
+		// die();
+		$stmt = $this->pdo->prepare("DELETE FROM $table_identifier");
+		$stmt->execute();
 	}
 	
-	/**
-	 * Ensure the key/value table exists in SQLite database
-	 */
-	private function ensure_kv_table_exists() {
-		// Check if the table already exists
-		$stmt = $this->pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'");
-		$table_exists = $stmt->fetch();
-		
-		if (!$table_exists) {
-			// Create the key/value table
-			$this->pdo->exec("
-				CREATE TABLE kv_store (
-					key_name TEXT PRIMARY KEY,
-					value_data TEXT,
-					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-				)
-			");
-			
-			// Create an index for faster lookups
-			$this->pdo->exec("CREATE INDEX idx_key_name ON kv_store (key_name)");
-		}
-	}
 
 	private function delete_file( $uri_string ) {
 		$uri = ZS_Sync_URI::from_string( $uri_string );

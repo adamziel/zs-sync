@@ -1,10 +1,8 @@
 <?php
 
 use CBOR\MapObject;
-use CBOR\TextStringObject;
 use CBOR\ByteStringObject;
 use CBOR\ListObject;
-use CBOR\NegativeIntegerObject;
 use CBOR\UnsignedIntegerObject;
 use CBOR\OtherObject\TrueObject;
 use CBOR\OtherObject\FalseObject;
@@ -20,6 +18,14 @@ class ZS_Sync_CBOR_Resource_Encoder {
 
 	public function __construct() {
 		$this->map = MapObject::create();
+	}
+
+	public function add_byte_string( $uri, $string ) {
+		$this->map->add(ByteStringObject::create($uri), ByteStringObject::create($string));
+	}
+
+	public function add_null( $uri ) {
+		$this->map->add(ByteStringObject::create($uri), NullObject::create());
 	}
 
 	public function add_database_row( $uri, $row, ZS_Sync_Table_Info $table_info ) {
@@ -44,13 +50,7 @@ class ZS_Sync_CBOR_Resource_Encoder {
 						UnsignedIntegerObject::create($mantissa)
 					));
 				} elseif (stripos($type, 'DATE') !== false || stripos($type, 'TIME') !== false) {
-					// Convert date/time to timestamp tag
-					$ts = (new DateTime($val))->getTimestamp();
-					if($ts >= 0) {
-						$list->add(UnsignedBigIntegerTag::create(ByteStringObject::create((string)$ts)));
-					} else {
-						$list->add(NegativeBigIntegerTag::create(ByteStringObject::create((string)$ts)));
-					}
+					$list->add(ByteStringObject::create($val));
 				} else {
 					// For other values, convert based on PHP type
 					if (is_int($val) || ctype_digit($val)) {
