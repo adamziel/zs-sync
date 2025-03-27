@@ -1,1 +1,5 @@
 /vendor/
+zs-sync.code-workspace
+doodle-scripts
+.idea
+tests/wordpress-polyfills.php
