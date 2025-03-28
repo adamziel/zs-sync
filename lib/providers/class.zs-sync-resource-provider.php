@@ -164,7 +164,10 @@ class ZS_Sync_Resource_Provider {
 			$resources[] = $resource_data;
 		}
 
-		return $resources;
+		return [
+			'resources' => $resources,
+			'has_more' => count($resources) === $limit,
+		];
 	}
 
 	public function get_resources( ZS_Sync_Resource_Fetch_Request $request ) {
@@ -271,7 +274,7 @@ class ZS_Sync_Resource_Provider {
 					// Confirm the file exists
 					if(!file_exists($file_path) || !is_file($file_path)) {
 						// @TODO how to handle a missing file or a non-file?
-						$cbor_map->add_file_chunk( $zs_uri->__toString(), null );
+						$cbor_map->add_file_chunk( $zs_uri->__toString(), 0, null );
 						continue 2;
 					}
 
@@ -293,7 +296,7 @@ class ZS_Sync_Resource_Provider {
 					try {
 						fseek($fp, $start);
 						$file_chunk = fread($fp, $length);
-						$cbor_map->add_file_chunk( $zs_uri->__toString(), $file_chunk );
+						$cbor_map->add_file_chunk( $zs_uri->__toString(), $start, $file_chunk );
 					} finally {
 						fclose($fp);
 					}

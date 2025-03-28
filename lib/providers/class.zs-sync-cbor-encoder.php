@@ -76,8 +76,15 @@ class ZS_Sync_CBOR_Resource_Encoder {
 		$this->map->add(ByteStringObject::create($uri), $list);
 	}
 
-	public function add_file_chunk( $uri, ?string $file_chunk ) {
-		$this->map->add(ByteStringObject::create($uri), null === $file_chunk ? NullObject::create() : ByteStringObject::create($file_chunk));
+	public function add_file_chunk( $uri, $start, ?string $file_chunk ) {
+		if(null === $file_chunk) {
+			$this->map->add(ByteStringObject::create($uri), NullObject::create());
+		} else {
+			$map = MapObject::create();
+			$map->add(ByteStringObject::create('start'), UnsignedIntegerObject::create($start));
+			$map->add(ByteStringObject::create('chunk'), ByteStringObject::create($file_chunk));
+			$this->map->add(ByteStringObject::create($uri), $map);
+		}
 	}
 
 	public function get_cbor_map() {

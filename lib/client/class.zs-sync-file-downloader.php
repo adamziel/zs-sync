@@ -1,5 +1,7 @@
 <?php
 
+use CBOR\OtherObject\NullObject;
+
 /**
  * ZS_Sync_File_Downloader
  * 
@@ -31,6 +33,11 @@ class ZS_Sync_File_Downloader {
 	private $target_dir;
 
 	/**
+	 * @var int The maximum size of a download in bytes
+	 */
+	private $max_download_size;
+
+	/**
 	 * Constructor
 	 *
 	 * @param ZS_Sync_Client $client The client to use for communication
@@ -48,6 +55,7 @@ class ZS_Sync_File_Downloader {
 		$this->target_dir = $options['target_dir'];
 		$this->temp_dir = isset( $options['temp_dir'] ) ? $options['temp_dir'] : sys_get_temp_dir() . '/zs-sync-downloads';
 		$this->chunk_size = isset( $options['chunk_size'] ) ? $options['chunk_size'] : 1024 * 1024; // 1MB default
+		$this->max_download_size = isset( $options['max_download_size'] ) ? $options['max_download_size'] : 1024 * 1024 * 10; // 10MB default
 
 		// Create temporary directory if it doesn't exist
 		if ( ! file_exists( $this->temp_dir ) ) {
@@ -66,7 +74,8 @@ class ZS_Sync_File_Downloader {
 	public function fetch_files( array $file_resources ) {
 		$results = [];
 
-		foreach ( $file_resources as $resource ) {
+		$remaining_resources = [];
+		foreach($file_resources as $resource) {
 			// Validate required fields
 			if ( empty( $resource['uri'] ) || !array_key_exists('filesize', $resource) ) {
 				$results[$resource['uri']] = [
@@ -77,10 +86,7 @@ class ZS_Sync_File_Downloader {
 			}
 
 			$uri = $resource['uri'];
-			$filesize = (int) $resource['filesize'];
-			
-			// Get file_path from uri
-			$file_path = $this->get_file_path_from_uri($uri);
+			$file_path = $this->uri_to_relative_path($uri);
 			if (empty($file_path)) {
 				$results[$uri] = [
 					'success' => false,
@@ -106,131 +112,149 @@ class ZS_Sync_File_Downloader {
 					}
 				}
 			}
-
-			// Create a file-specific temp directory
-			$file_temp_dir = $this->temp_dir . '/' . md5( $uri );
-			if ( ! file_exists( $file_temp_dir ) ) {
-				mkdir( $file_temp_dir, 0755, true );
-			}
-
-			// Calculate how many chunks are needed
-			$total_chunks = ceil( $filesize / $this->chunk_size );
 			
-			// Track missing chunks with their start and length
-			$missing_chunks = [];
-			$downloaded_size = 0;
-			
-			// Check for existing chunks
-			for ( $i = 0; $i < $total_chunks; $i++ ) {
-				$start = $i * $this->chunk_size;
-				$length = min( $this->chunk_size, $filesize - $start );
-				$chunk_file = $file_temp_dir . '/' . basename( $file_path ) . '.chunk.' . $start . '_' . $length;
+			$remaining_resources[$uri] = $resource;
+		}
+
+		while(count($remaining_resources) > 0) {
+			$next_download_request = [];
+			$total_requested_bytes = 0;
+
+			foreach($remaining_resources as $uri => $resource) {
+				$filesize = (int) $resource['filesize'];
 				
-				if ( file_exists( $chunk_file ) ) {
-					$chunk_size = filesize( $chunk_file );
-					$downloaded_size += $chunk_size;
-					
-					// If chunk is incomplete, mark it for re-download
-					if ( $chunk_size !== $length ) {
-						$missing_chunks[] = [
-							'index' => $i,
-							'start' => $start,
-							'length' => $length
-						];
-					}
-				} else {
-					$missing_chunks[] = [
-						'index' => $i,
-						'start' => $start,
-						'length' => $length
-					];
+				// Create a file-specific temp directory
+				$total_chunks = ceil( $filesize / $this->chunk_size );
+				$missing_chunks = $this->compute_missing_chunks($uri, $filesize);
+				if ( empty( $missing_chunks ) ) {
+					$results[$uri] = $this->assemble_file( $uri, $total_chunks );
+					$this->cleanup_temp_files($uri);
+					unset($remaining_resources[$uri]);
+					continue;
 				}
-			}
-			
-			// If we have all chunks with the correct sizes, we can skip downloading
-			if ( empty( $missing_chunks ) && $downloaded_size === $filesize ) {
-				// Assemble the file
-				$result = $this->assemble_file( $file_temp_dir, $file_path, $total_chunks );
-				$results[$uri] = $result;
-				continue;
-			}
-			
-			// Download missing chunks
-			$download_success = true;
-			foreach ( $missing_chunks as $chunk_info ) {
-				$chunk_index = $chunk_info['index'];
-				$start = $chunk_info['start'];
-				$length = $chunk_info['length'];
 				
-				// Create the request for this chunk
-				$fetch_request = ZS_Sync_Resource_Fetch_Request::from_array([
-					'resources' => [
-						[
-							'uri' => $uri,
-							'range' => [
-								'start' => $start,
-								'length' => $length
-							]
+				// Download missing chunks
+				foreach ( $missing_chunks as $chunk_info ) {
+					$next_download_request[] = [
+						'uri' => $uri,
+						'range' => [
+							'start' => $chunk_info['start'],
+							'length' => $chunk_info['length']
 						]
-					]
-				]);
-				
-				// Fetch the chunk
-				$response = $this->client->get_resources( $fetch_request );
-				
-				// Check for errors
-				if ( $response instanceof ZS_Sync_Response_Error ) {
-					$results[$uri] = [
-						'success' => false,
-						'error' => 'Failed to download chunk ' . $chunk_index . ': ' . $response->message,
 					];
-					$download_success = false;
-					break;
-				}
-				
-				// Extract the chunk data from the CBOR response
-				$resource_data = $this->extract_file_chunk_from_cbor( $response, $uri );
-				
-				if ( $resource_data === null || empty( $resource_data ) ) {
-					$results[$uri] = [
-						'success' => false,
-						'error' => 'Empty or missing data for chunk ' . $chunk_index,
-					];
-					$download_success = false;
-					break;
-				}
-				
-				// Save the chunk to a temporary file with start and length encoded in the filename
-				$chunk_file = $file_temp_dir . '/' . basename( $file_path ) . '.chunk.' . $start . '_' . $length;
-				$bytes_written = file_put_contents( $chunk_file, $resource_data );
-				
-				if ( $bytes_written === false || $bytes_written !== strlen( $resource_data ) ) {
-					$results[$uri] = [
-						'success' => false,
-						'error' => 'Failed to write chunk ' . $chunk_index . ' to temporary file',
-					];
-					$download_success = false;
-					break;
+					$total_requested_bytes += $chunk_info['length'];
+					if($total_requested_bytes + $this->chunk_size > $this->max_download_size) {
+						break;
+					}
 				}
 			}
-			
-			// If download failed for any chunk, continue to the next file
-			if ( ! $download_success ) {
-				continue;
+
+			if(count($next_download_request) === 0) {
+				break;
 			}
+
+			$fetch_request = ZS_Sync_Resource_Fetch_Request::from_array([
+				'resources' => $next_download_request
+			]);
 			
-			// All chunks downloaded successfully, assemble the final file
-			$result = $this->assemble_file( $file_temp_dir, $file_path, $total_chunks );
-			$results[$uri] = $result;
-			
-			// Clean up temp files after successful assembly
-			if ($result['success']) {
+			$cbor_response = $this->client->get_resources( $fetch_request );
+			// Check for errors
+			if ( $cbor_response instanceof ZS_Sync_Response_Error ) {
+				$results[$uri] = [
+					'success' => false,
+					'error' => 'Failed to download chunks: ' . json_encode($next_download_request),
+				];
 				$this->cleanup_temp_files($uri);
+				unset($remaining_resources[$uri]);
+				break;
+			}
+
+			foreach($cbor_response->getIterator() as $entry) {
+				$uri = $entry->getKey()->getValue();
+				$resource_data = $entry->getValue();
+				if($resource_data instanceof NullObject) {
+					$results[$uri] = [
+						'success' => false,
+						'error' => 'File no longer exists: ' . $uri,
+					];
+					$this->cleanup_temp_files($uri);
+					unset($remaining_resources[$uri]);
+					break;
+				}
+				$start = $resource_data->get('start')->getValue();
+				$file_chunk = $resource_data->get('chunk')->getValue();
+					
+				// Save the chunk to a temporary file with start and length encoded in the filename
+				$chunks_dir = $this->get_temporary_dir_to_buffer_chunks($uri);
+				$file_path = $this->uri_to_relative_path($uri);
+				$chunk_file = wp_join_paths($chunks_dir, basename($file_path) . '.chunk.' . $start . '_' . $this->chunk_size);
+				$bytes_written = file_put_contents( $chunk_file, $file_chunk );
+				
+				if ( $bytes_written === false || $bytes_written !== strlen( $file_chunk ) ) {
+					$results[$uri] = [
+						'success' => false,
+						'error' => 'Failed to write chunk ' . $start . ' of ' . $uri . ' to a temporary file',
+					];
+					$this->cleanup_temp_files($uri);
+					unset($remaining_resources[$uri]);
+				}
 			}
 		}
 		
 		return $results;
 	}
+
+	/**
+	 * Computes which chunks are still missing for a given resource
+	 *
+	 * @param string $uri The URI of the file resource
+	 * @param int $filesize The total size of the file
+	 * @param int $chunk_size The size of each chunk
+	 * @return array An array containing 'missing_chunks' and 'expected_download_size'
+	 */
+	private function compute_missing_chunks($uri, $filesize) {
+		$file_path = $this->uri_to_relative_path($uri);
+		$chunks_dir = $this->get_temporary_dir_to_buffer_chunks($uri);
+		$total_chunks = ceil($filesize / $this->chunk_size);
+		$missing_chunks = [];
+		
+		// Check which chunks already exist
+		for ($chunk_index = 0; $chunk_index < $total_chunks; $chunk_index++) {
+			$start = $chunk_index * $this->chunk_size;
+			$chunk_file = wp_join_paths($chunks_dir, basename($file_path) . '.chunk.' . $start . '_' . $this->chunk_size);
+			
+			// @TODO integrity checks
+			if (!file_exists($chunk_file)) {
+				$missing_chunks[] = [
+					'index' => $chunk_index,
+					'start' => $start,
+					'length' => $this->chunk_size
+				];
+			}
+			
+		}
+		
+		return $missing_chunks;
+	}
+	
+	/**
+	 * Gets the temporary directory for a file
+	 *
+	 * @param string $uri The URI of the file resource
+	 * @return string The path to the temporary directory
+	 */
+	private function get_temporary_dir_to_buffer_chunks($uri, $create_if_missing = true) {
+		$file_path = $this->uri_to_relative_path($uri);
+		$chunks_dir = wp_join_paths($this->temp_dir, md5($file_path));
+		
+		// Create the temp directory if it doesn't exist
+		if (!file_exists($chunks_dir) && $create_if_missing) {
+			mkdir($chunks_dir, 0755, true);
+		}
+		
+		return $chunks_dir;
+	}
+	
 	
 	/**
 	 * Extracts the file path from a URI
@@ -238,7 +262,7 @@ class ZS_Sync_File_Downloader {
 	 * @param string $uri The URI of the file resource
 	 * @return string The file path
 	 */
-	private function get_file_path_from_uri($uri) {
+	private function uri_to_relative_path($uri) {
 		$zs_uri = ZS_Sync_URI::from_string($uri);
 		if ($zs_uri && $zs_uri->resource_type === 'files') {
 			return $zs_uri->id;
@@ -249,13 +273,13 @@ class ZS_Sync_File_Downloader {
 	/**
 	 * Assembles chunks into a final file
 	 *
-	 * @param string $file_temp_dir The temporary directory containing chunks
-	 * @param string $file_path The relative path of the file being downloaded
+	 * @param string $chunks_dir The temporary directory containing chunks
 	 * @return array Result with success/failure status
 	 */
-	private function assemble_file( $file_temp_dir, $file_path ) {
-		// Determine the target path based on configuration
-		$target_file_path = wp_join_paths($this->target_dir, $file_path);
+	private function assemble_file( $uri ) {
+		$relative_path = $this->uri_to_relative_path($uri);
+		$chunks_dir = $this->get_temporary_dir_to_buffer_chunks($uri);
+		$target_file_path = wp_join_paths($this->target_dir, $relative_path);
 		$target_dir = dirname($target_file_path);
 		
 		// Create the target directory if it doesn't exist
@@ -281,10 +305,10 @@ class ZS_Sync_File_Downloader {
 		
 		// Append each chunk to the output file
 		$bytes_written = 0;
-		$filename = basename( $file_path );
+		$filename = basename( $relative_path );
 		
 		// Get all chunk files and sort them by start position
-		$chunk_files = glob( $file_temp_dir . '/' . $filename . '.chunk.*' );
+		$chunk_files = glob( $chunks_dir . '/' . $filename . '.chunk.*' );
 		$chunks = [];
 		
 		foreach ( $chunk_files as $chunk_file ) {
@@ -344,27 +368,7 @@ class ZS_Sync_File_Downloader {
 			'bytes_written' => $bytes_written,
 		];
 	}
-	
-	/**
-	 * Extracts a file chunk from a CBOR response
-	 * 
-	 * @TODO: Don't use reflections here.
-	 *
-	 * @param CBOR\MapObject $cbor_response The CBOR response from the server
-	 * @param string $uri The URI of the resource to extract
-	 * @return string|null The file chunk data or null if not found
-	 */
-	private function extract_file_chunk_from_cbor( CBOR\MapObject $cbor_response, $uri ) {
-		if(!$cbor_response->has($uri)) {
-			return null;
-		}
-		$value_obj = $cbor_response->get($uri);
-		if($value_obj instanceof CBOR\OtherObject\NullObject) {
-			return null;
-		}
-		return $value_obj->getValue();
-	}
-	
+
 	/**
 	 * Cleans up temporary files for a given file resource
 	 *
@@ -372,25 +376,25 @@ class ZS_Sync_File_Downloader {
 	 * @return bool Success or failure
 	 */
 	public function cleanup_temp_files( $uri ) {
-		$file_temp_dir = $this->temp_dir . '/' . md5( $uri );
+		$chunks_dir = $this->get_temporary_dir_to_buffer_chunks($uri, false);
 		
-		if ( ! file_exists( $file_temp_dir ) ) {
+		if ( ! file_exists( $chunks_dir ) ) {
 			return true; // Nothing to clean up
 		}
 		
-		$files = scandir( $file_temp_dir );
+		$files = scandir( $chunks_dir );
 		
 		foreach ( $files as $file ) {
 			if ( $file === '.' || $file === '..' ) {
 				continue;
 			}
-			$path = wp_join_paths( $file_temp_dir, $file );
+			$path = wp_join_paths( $chunks_dir, $file );
 			if ( is_file( $path ) && ! unlink( $path ) ) {
 				return false;
 			}
 		}
 		
-		return rmdir( $file_temp_dir );
+		return rmdir( $chunks_dir );
 	}
-	
+
 }

@@ -3,7 +3,6 @@
 use CBOR\ByteStringObject;
 use CBOR\OtherObject\NullObject;
 use CBOR\Tag\NegativeBigIntegerTag;
-use CBOR\Tag\TimestampTag;
 use CBOR\Tag\UnsignedBigIntegerTag;
 use CBOR\UnsignedIntegerObject;
 use CBOR\TextStringObject;
@@ -86,14 +85,9 @@ class ZS_Sync_Data_Importer {
 	private $csv_output_dir = './received-data';
 
 	/**
-	 * @var array Keeps track of tables we've seen to manage CSV headers
-	 */
-	private $processed_tables = [];
-
-	/**
 	 * @var array Keeps track of the next resource list request version
 	 */
-	private $next_version = null;
+	private $last_processed_version = null;
 
 	private $pdo;
 	private $existing_tables = [];
@@ -144,13 +138,13 @@ class ZS_Sync_Data_Importer {
 			'errors'           => [],
 		];
 
-		$page     = 1;
-		$has_more = true;
-
-		while ( $has_more ) {
+		$page = 1;
+		do {
 			echo "Processing page $page...\n";
 
-			$resources_list = $this->list_resources();
+			$resources_response = $this->list_resources($this->last_processed_version);
+			$resources_list = $resources_response['resources'];
+			$has_more = $resources_response['has_more'];
 
 			if ( $resources_list instanceof ZS_Sync_Response_Error ) {
 				$stats['errors'][] = 'Error listing resources: ' . $resources_list->message;
@@ -158,7 +152,6 @@ class ZS_Sync_Data_Importer {
 			}
 
 			if ( empty( $resources_list ) ) {
-				$has_more = false;
 				break;
 			}
 
@@ -192,16 +185,13 @@ class ZS_Sync_Data_Importer {
 			// Set the next version from the last resource in the list
 			$last_resource = end( $resources_list );
 			if ( isset( $last_resource['time_of_last_scan'] ) && array_key_exists( 'hash_value', $last_resource ) ) {
-				$this->next_version = [
+				$this->last_processed_version = [
 					'time_of_last_scan' => $last_resource['time_of_last_scan'],
 					'hash_value'        => $last_resource['hash_value'],
 				];
 			}
-
-			// Determine if there's more to fetch
-			$has_more = count( $resources_list ) >= 100; // Default limit is 100
 			$page ++;
-		}
+		} while ( $has_more );
 
 		return $stats;
 	}
@@ -243,10 +233,10 @@ class ZS_Sync_Data_Importer {
 	 *
 	 * @return array|ZS_Sync_Response_Error List of resources or error
 	 */
-	private function list_resources() {
+	private function list_resources( $since_version = null ) {
 		$request = ZS_Sync_Resource_List_Request::from_array([
 			'limit' => 100,
-			'since_version' => $this->next_version,
+			'since_version' => $since_version,
 		]);
 		return $this->client->list_resources( $request );
 	}

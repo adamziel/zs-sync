@@ -26,6 +26,8 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	private string $root_path;
 	private array $indexed_paths = [];
 	private bool $is_finished = false;
+	private array $ignore_file_patterns = [];
+	private array $ignore_directory_patterns = [];
 
 	/**
 	 * Construct the indexer with optional settings.
@@ -39,12 +41,45 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 	 * @type array $exclude_tables Array of table names to ignore during scanning. Default empty array.
 	 * @type array $cursor Existing state to resume indexing from. Contains 'table_name' and 'last_pk'
 	 *                                    keys. Default null.
+	 * @type array $ignore_file_patterns Array of regex patterns to ignore files during scanning.
+	 * @type array $ignore_directory_patterns Array of regex patterns to ignore directories during scanning.
 	 * }
 	 */
 	public function __construct( string $root_path, array $options = [] ) {
 		$this->root_path      = $root_path;
 		$this->max_chunk_size = $options['max_chunk_size'] ?? \ZS_Sync_Scanner_Interface::DEFAULT_MAX_CHUNK_SIZE;
 		$this->cursor         = isset($options['cursor']) ? $options['cursor'] : null;
+		
+		// Default ignore patterns for files
+		$default_ignore_file_patterns = [
+			'/\.DS_Store$/',
+			'/Thumbs\.db$/',
+		];
+		
+		// Default ignore patterns for directories
+		$default_ignore_directory_patterns = [
+			'/^\.git(\/|$)/',
+			'/^\.svn(\/|$)/',
+			'/^\.mercurial(\/|$)/',
+			'/^\.hg(\/|$)/',
+			'/^\.bzr(\/|$)/',
+			'/^CVS(\/|$)/',
+			'/^node_modules(\/|$)/',
+		];
+		
+		$this->ignore_file_patterns = isset($options['ignore_file_patterns']) ? 
+			array_merge($default_ignore_file_patterns, $options['ignore_file_patterns']) : 
+			$default_ignore_file_patterns;
+			
+		$this->ignore_directory_patterns = isset($options['ignore_directory_patterns']) ? 
+			array_merge($default_ignore_directory_patterns, $options['ignore_directory_patterns']) : 
+			$default_ignore_directory_patterns;
+			
+		// For backward compatibility
+		if (isset($options['ignore_patterns'])) {
+			$this->ignore_file_patterns = array_merge($this->ignore_file_patterns, $options['ignore_patterns']);
+			$this->ignore_directory_patterns = array_merge($this->ignore_directory_patterns, $options['ignore_patterns']);
+		}
 	}
 
 	/**
@@ -69,17 +104,30 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 				break;
 			}
 
-			if ( is_dir( $this->visitor->get_absolute_path() ) ) {
+			$relative_path = $this->visitor->get_relative_path();
+			$absolute_path = $this->visitor->get_absolute_path();
+			$is_directory = is_dir($absolute_path);
+			
+			// Skip directories that match ignore patterns
+			if ( $is_directory ) {
+				if ( $this->should_ignore_directory( $relative_path ) ) {
+					continue;
+				}
+				// Skip directories as we only index files
+				continue;
+			}
+			
+			// Skip files that match ignore patterns
+			if ( $this->should_ignore_file( $relative_path ) ) {
 				continue;
 			}
 
 			if('' === $from_path ) {
-				$from_path = $this->visitor->get_relative_path();
+				$from_path = $relative_path;
 			}
 
-			$relative_path = $this->visitor->get_relative_path();
-			$file_hash     = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
-			$file_size     = file_exists( $this->visitor->get_absolute_path() ) ? filesize( $this->visitor->get_absolute_path() ) : 0;
+			$file_hash     = hexdec( hash_file( 'crc32', $absolute_path ) );
+			$file_size     = file_exists( $absolute_path ) ? filesize( $absolute_path ) : 0;
 
 			$this->indexed_paths[ $relative_path ] = [
 				'hash' => $file_hash,
@@ -138,6 +186,36 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Checks if a file should be ignored based on the regex ignore patterns.
+	 *
+	 * @param string $path The relative path to check.
+	 * @return bool True if the file should be ignored, false otherwise.
+	 */
+	private function should_ignore_file( string $path ): bool {
+		foreach ( $this->ignore_file_patterns as $pattern ) {
+			if ( preg_match( $pattern, $path ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks if a directory should be ignored based on the regex ignore patterns.
+	 *
+	 * @param string $path The relative path to check.
+	 * @return bool True if the directory should be ignored, false otherwise.
+	 */
+	private function should_ignore_directory( string $path ): bool {
+		foreach ( $this->ignore_directory_patterns as $pattern ) {
+			if ( preg_match( $pattern, $path ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
