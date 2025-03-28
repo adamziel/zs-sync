@@ -4,6 +4,12 @@
  * Description: Attach sync clients to an authoritative WordPress.
  * Version: 1.0.0
  * Author: Adam Zieliński and Dennis Snell
+ * 
+ * @TODO: Error handling
+ * @TODO: Exceptions vs return false
+ * @TODO: Code reuse, e.g. ZS_Sync_Scanner_Bigint filters out some tables from scanning and
+ *        ZS_Sync_Data_Importer filters out the same tables, but they use different logic.
+ * @TODO: Plug this into the DataLiberation pipeline to rewrite URLs etc.
  */
 
 if ( ! defined( 'ZS_SYNC_VERSION' ) ) {
@@ -13,7 +19,11 @@ if ( ! defined( 'ZS_SYNC_VERSION' ) ) {
 function init() {
 	require_once __DIR__ . '/load.php';
 
-	$endpoint = new ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint( new ZS_Sync_Resource_Provider() );
+	$endpoint = new ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint(
+		new ZS_Sync_Resource_Provider( [
+			'root_path' => WP_CONTENT_DIR,
+		] )
+	);
 	$endpoint->register_routes();
 }
 

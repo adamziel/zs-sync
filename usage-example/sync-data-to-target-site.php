@@ -1,9 +1,10 @@
 <?php
-
 /**
  * This script intentionally has no dependency on WordPress.
- * The initial sync can be performed even before the WordPress
- * site is installed.
+ * 1. The initial sync can be performed even before the WordPress
+ *    site is installed.
+ * 2. If WordPress is left in a broken state, the sync can continue
+ *    and recover.
  */
 
 use CBOR\ByteStringObject;
@@ -13,8 +14,18 @@ use CBOR\Tag\UnsignedBigIntegerTag;
 use CBOR\UnsignedIntegerObject;
 use CBOR\TextStringObject;
 
+// Configuration
+define('AUTHORITATIVE_SITE_URL', 'http://127.0.0.1:5324/');
+define('TARGET_SITE_PATH', __DIR__ . '/../../sync-target');
+define('TARGET_SITE_DB_HOST', '127.0.0.1');
+define('TARGET_SITE_DB_USER', 'root');
+define('TARGET_SITE_DB_PASSWORD', 'my-secret-pw');
+define('TARGET_SITE_DB_NAME', 'zs_new_sync_target');
+
+// No need to change anything below if you just want to configure the sync
+
 // Include required files for the ZS-Sync system
-require_once __DIR__ . '/load.php';
+require_once __DIR__ . '/../load.php';
 
 // Set up error reporting for the example
 ini_set('display_errors', 1);
@@ -23,17 +34,17 @@ error_reporting(E_ALL);
 
 echo "Starting ZS Sync data import example...\n";
 
-// Remote WordPress site to import from
-$remote_site_url = 'http://127.0.0.1:5324/index.php?rest_route=%2Fzs-sync%2Fv1%2Fresources';
+// Authoritative WordPress site to import from
+$remote_site_url = AUTHORITATIVE_SITE_URL . 'index.php?rest_route=%2Fzs-sync%2Fv1%2Fresources';
 
 try {
     // Create client instance for the remote site
     $client = new ZS_Sync_Transport_Wordpress_Rest_Api_Client($remote_site_url);
 
-	// Configure the database connection
-	$pdo = new PDO('mysql:host=127.0.0.1', 'root', 'my-secret-pw');
-	$pdo->query("CREATE DATABASE IF NOT EXISTS zs_new_sync_target");
-	$pdo->query("USE zs_new_sync_target");
+	// Target WordPress site's database data
+	$pdo = new PDO('mysql:host=' . TARGET_SITE_DB_HOST, TARGET_SITE_DB_USER, TARGET_SITE_DB_PASSWORD);
+	$pdo->query("CREATE DATABASE IF NOT EXISTS " . TARGET_SITE_DB_NAME);
+	$pdo->query("USE " . TARGET_SITE_DB_NAME);
 	$pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
 
 	$wp_options_table = 'wptests_options';
@@ -46,7 +57,7 @@ try {
 
     // Configure import options
     $import_options = [
-        'files_output_dir' => __DIR__ . '/../sync-target/wp-content',
+        'files_output_dir' => TARGET_SITE_PATH . '/wp-content',
         'last_processed_version' => $last_processed_version,
         'pdo' => $pdo,
     ];
@@ -271,7 +282,7 @@ class ZS_Sync_Data_Importer {
 	 */
 	private function list_resources( $since_version = null ) {
 		$request = ZS_Sync_Resource_List_Request::from_array([
-			'limit' => 100,
+			'limit' => 1000,
 			'since_version' => $since_version,
 		]);
 		return $this->client->list_resources( $request );
@@ -383,21 +394,26 @@ class ZS_Sync_Data_Importer {
 		}
 		// print_r($row_data);
 		$table_identifier = ZS_Sync_MySQL_Helper::schema_object_name_for_query( $table_name );
+
+		// @TODO: Skip certain tables and rows, e.g. site URLs, transients, etc.
+		//        They should not be transferred anyway, but if they are, the client
+		//        could simply reject them.
+		// @TODO: Make it filterable
 		
-		// Build the INSERT ... ON DUPLICATE KEY UPDATE query. We'll be running this
-		// with $wpdb in the future.
+		// @TODO: Rewrite certain columns, e.g. site URLs in post_content. Make it filterable
+		//        for plugins to support any custom data rewriting logic.
+
 		$columns = $this->get_table_columns( $table_name );
 		$sql = "INSERT INTO $table_identifier (" . implode(', ', $columns) . ")
 				VALUES (" . implode(', ', $row_data) . ")
 				ON DUPLICATE KEY UPDATE ";
 
-		// Add the update part for each column
 		$updates = [];
 		foreach ($columns as $column) {
 			$updates[] = "$column = VALUES($column)";
 		}
 		$sql .= implode(', ', $updates);
-		// Prepare and execute the statement
+
 		try {
 			$this->pdo->exec($sql);
 		} catch (PDOException $e) {

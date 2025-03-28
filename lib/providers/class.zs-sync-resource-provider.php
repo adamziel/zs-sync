@@ -45,7 +45,10 @@ class ZS_Sync_Resource_Provider {
 		$this->max_file_chunk_size = $options['max_file_chunk_size'] ?? 1024 * 1024; // 1MB default
 		$this->max_file_chunks_per_response = $options['max_file_chunks_per_response'] ?? 5;
 		$this->max_db_rows_per_response = $options['max_db_rows_per_response'] ?? 1000;
-		$this->root_path = $options['root_path'] ?? WP_CONTENT_DIR;
+		if(!isset($options['root_path'])) {
+			throw new InvalidArgumentException('root_path is required');
+		}
+		$this->root_path = $options['root_path'];
 	}
 
 	public function list_resources( ZS_Sync_Resource_List_Request $request ) {
