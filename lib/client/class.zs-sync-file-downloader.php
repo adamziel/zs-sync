@@ -26,17 +26,28 @@ class ZS_Sync_File_Downloader {
 	private $chunk_size;
 
 	/**
+	 * @var string The target directory for storing assembled files
+	 */
+	private $target_dir;
+
+	/**
 	 * Constructor
 	 *
 	 * @param ZS_Sync_Client $client The client to use for communication
 	 * @param array $options Optional configuration settings
 	 *     @type string $temp_dir The directory to use for temporary chunk storage
+	 *     @type string $target_dir The directory to store assembled files
 	 *     @type int $chunk_size The size of each chunk in bytes (default: 1MB)
 	 */
 	public function __construct( ZS_Sync_Client $client, array $options = [] ) {
+		if ( ! isset( $options['target_dir'] ) ) {
+			throw new InvalidArgumentException( 'target_dir is required' );
+		}
+		
 		$this->client = $client;
+		$this->target_dir = $options['target_dir'];
 		$this->temp_dir = isset( $options['temp_dir'] ) ? $options['temp_dir'] : sys_get_temp_dir() . '/zs-sync-downloads';
-		$this->chunk_size = isset( $options['chunk_size'] ) ? $options['chunk_size'] : 2 ; // 1024 * 1024; // 1MB default
+		$this->chunk_size = isset( $options['chunk_size'] ) ? $options['chunk_size'] : 1024 * 1024; // 1MB default
 
 		// Create temporary directory if it doesn't exist
 		if ( ! file_exists( $this->temp_dir ) ) {
@@ -77,7 +88,25 @@ class ZS_Sync_File_Downloader {
 				];
 				continue;
 			}
-			
+
+			// Skip the download if the file already exists and is unchanged
+			$target_file_path = wp_join_paths($this->target_dir, $file_path);
+			if ( file_exists( $target_file_path ) ) {
+				if (isset($resource['hash_value']) && function_exists('hash_file')) {
+					$file_hash = hexdec( hash_file( 'crc32', $target_file_path ) );
+					
+					// If the hash matches, we can skip this file
+					if ($file_hash == $resource['hash_value']) {
+						$results[$uri] = [
+							'success' => true,
+							'path' => $target_file_path,
+							'status' => 'unchanged',
+						];
+						continue;
+					}
+				}
+			}
+
 			// Create a file-specific temp directory
 			$file_temp_dir = $this->temp_dir . '/' . md5( $uri );
 			if ( ! file_exists( $file_temp_dir ) ) {
@@ -193,6 +222,11 @@ class ZS_Sync_File_Downloader {
 			// All chunks downloaded successfully, assemble the final file
 			$result = $this->assemble_file( $file_temp_dir, $file_path, $total_chunks );
 			$results[$uri] = $result;
+			
+			// Clean up temp files after successful assembly
+			if ($result['success']) {
+				$this->cleanup_temp_files($uri);
+			}
 		}
 		
 		return $results;
@@ -217,11 +251,12 @@ class ZS_Sync_File_Downloader {
 	 *
 	 * @param string $file_temp_dir The temporary directory containing chunks
 	 * @param string $file_path The relative path of the file being downloaded
-	 * @param int $total_chunks The total number of chunks to assemble
 	 * @return array Result with success/failure status
 	 */
-	private function assemble_file( $file_temp_dir, $file_path, $total_chunks ) {
-		$target_dir = dirname( $file_path );
+	private function assemble_file( $file_temp_dir, $file_path ) {
+		// Determine the target path based on configuration
+		$target_file_path = wp_join_paths($this->target_dir, $file_path);
+		$target_dir = dirname($target_file_path);
 		
 		// Create the target directory if it doesn't exist
 		if ( ! file_exists( $target_dir ) ) {
@@ -234,13 +269,13 @@ class ZS_Sync_File_Downloader {
 		}
 		
 		// Truncate the file to 0 bytes before writing to it
-		file_put_contents($file_path, '');
+		file_put_contents($target_file_path, '');
 		
-		$output_file = fopen( $file_path, 'wb' );
+		$output_file = fopen( $target_file_path, 'wb' );
 		if ( ! $output_file ) {
 			return [
 				'success' => false,
-				'error' => 'Failed to open output file for writing: ' . $file_path,
+				'error' => 'Failed to open output file for writing: ' . $target_file_path,
 			];
 		}
 		
@@ -305,7 +340,7 @@ class ZS_Sync_File_Downloader {
 		
 		return [
 			'success' => true,
-			'path' => $file_path,
+			'path' => $target_file_path,
 			'bytes_written' => $bytes_written,
 		];
 	}
@@ -319,77 +354,15 @@ class ZS_Sync_File_Downloader {
 	 * @param string $uri The URI of the resource to extract
 	 * @return string|null The file chunk data or null if not found
 	 */
-	private function extract_file_chunk_from_cbor( $cbor_response, $uri ) {
-		// The CBOR response is a complex object that we need to handle carefully
-		// to avoid linter errors. We'll use a minimal set of operations.
-		
-		try {
-			// We need to use reflection to safely handle the CBOR objects
-			// and to avoid linter errors with undefined methods
-			
-			// Iterate through the entries using reflection
-			$reflection = new \ReflectionObject( $cbor_response );
-			
-			// Try to get the getIterator method if it exists
-			if ( ! $reflection->hasMethod( 'getIterator' ) ) {
-				return null;
-			}
-			
-			$iterator_method = $reflection->getMethod( 'getIterator' );
-			$iterator = $iterator_method->invoke( $cbor_response );
-			
-			// Iterate through each entry
-			foreach ( $iterator as $entry ) {
-				// Use reflection to get the key and value
-				$entry_reflection = new \ReflectionObject( $entry );
-				
-				// Get the key
-				if ( ! $entry_reflection->hasMethod( 'getKey' ) ) {
-					continue;
-				}
-				
-				$key_method = $entry_reflection->getMethod( 'getKey' );
-				$key_obj = $key_method->invoke( $entry );
-				
-				// Get the value from the key object
-				$key_reflection = new \ReflectionObject( $key_obj );
-				if ( ! $key_reflection->hasMethod( 'getValue' ) ) {
-					continue;
-				}
-				
-				$key_value_method = $key_reflection->getMethod( 'getValue' );
-				$key = $key_value_method->invoke( $key_obj );
-				
-				// Check if this is the URI we're looking for
-				if ( $key !== $uri ) {
-					continue;
-				}
-				
-				// Get the value object
-				if ( ! $entry_reflection->hasMethod( 'getValue' ) ) {
-					continue;
-				}
-				
-				$value_method = $entry_reflection->getMethod( 'getValue' );
-				$value_obj = $value_method->invoke( $entry );
-				
-				// Get the file content from the value object
-				$value_reflection = new \ReflectionObject( $value_obj );
-				if ( ! $value_reflection->hasMethod( 'getValue' ) ) {
-					continue;
-				}
-				
-				$value_content_method = $value_reflection->getMethod( 'getValue' );
-				$content = $value_content_method->invoke( $value_obj );
-				
-				return $content;
-			}
-		} catch ( \Exception $e ) {
-			// If anything goes wrong, return null
+	private function extract_file_chunk_from_cbor( CBOR\MapObject $cbor_response, $uri ) {
+		if(!$cbor_response->has($uri)) {
 			return null;
 		}
-		
-		return null;
+		$value_obj = $cbor_response->get($uri);
+		if($value_obj instanceof CBOR\OtherObject\NullObject) {
+			return null;
+		}
+		return $value_obj->getValue();
 	}
 	
 	/**
@@ -405,10 +378,14 @@ class ZS_Sync_File_Downloader {
 			return true; // Nothing to clean up
 		}
 		
-		$files = glob( $file_temp_dir . '/*' );
+		$files = scandir( $file_temp_dir );
 		
 		foreach ( $files as $file ) {
-			if ( is_file( $file ) && ! unlink( $file ) ) {
+			if ( $file === '.' || $file === '..' ) {
+				continue;
+			}
+			$path = wp_join_paths( $file_temp_dir, $file );
+			if ( is_file( $path ) && ! unlink( $path ) ) {
 				return false;
 			}
 		}
@@ -416,20 +393,4 @@ class ZS_Sync_File_Downloader {
 		return rmdir( $file_temp_dir );
 	}
 	
-	/**
-	 * Get the total temp directory size for all downloads
-	 *
-	 * @return int Size in bytes
-	 */
-	public function get_temp_dir_size() {
-		$size = 0;
-		
-		foreach ( new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $this->temp_dir ) ) as $file ) {
-			if ( $file->isFile() ) {
-				$size += $file->getSize();
-			}
-		}
-		
-		return $size;
-	}
 }

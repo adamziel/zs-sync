@@ -26,12 +26,11 @@ $remote_site_url = 'http://127.0.0.1:5324/index.php?rest_route=%2Fzs-sync%2Fv1%2
 try {
     // Create client instance for the remote site
     $client = new ZS_Sync_Transport_Wordpress_Rest_Api_Client($remote_site_url);
-	$resources = $client->list_resources( ZS_Sync_Resource_List_Request::from_array([]) );
 
     // Configure import options
     $import_options = [
-        'files_output_dir' => './received-files',  // Where to save received files
-        'csv_output_dir' => './received-data',     // Where to save CSV files
+        'files_output_dir' => __DIR__ . '/../sync-wp-content',  // Where to save received files
+        'csv_output_dir' => __DIR__ . '/../sync-wp-content',     // Where to save CSV files
     ];
 
     // Create the importer
@@ -163,43 +162,8 @@ class ZS_Sync_Data_Importer {
 				break;
 			}
 
-			// Set the next version from the last resource in the list
-			$last_resource = end( $resources_list );
-			if ( isset( $last_resource['time_of_last_scan'] ) && isset( $last_resource['hash_value'] ) ) {
-				$this->next_version = [
-					'time_of_last_scan' => $last_resource['time_of_last_scan'],
-					'hash_value'        => $last_resource['hash_value'],
-				];
-			}
-
 			// Fetch the files first
-			$file_resources = [];
-			foreach($resources_list as $resource) {
-				if (!isset($resource['type']) || $resource['type'] !== 'files') {
-					continue;
-				}
-				if($resource['is_directory']) {
-					if(null === $resource['hash_value']) {
-						rmdir($this->files_output_dir . '/' . $resource['file_path']);
-					} elseif(!is_dir($this->files_output_dir . '/' . $resource['file_path'])) {
-						mkdir($this->files_output_dir . '/' . $resource['file_path']);
-					}
-					continue;
-				}
-				if(null === $resource['hash_value']) {
-					$this->delete_file($resource['uri']);
-					continue;
-				}
-				$file_resources[] = $resource;
-			}
-			echo "Downloading " . count($file_resources) . " resources...\n";
-			
-			$downloader = new ZS_Sync_File_Downloader($this->client, [
-				'temp_dir' => __DIR__ . '/temp',
-				'chunk_size' => 2
-			]);
-			
-			$download_results = $downloader->fetch_files($file_resources);
+			$download_results = $this->fetch_files( $resources_list );
 			
 			// Log any download errors
 			foreach ($download_results as $uri => $result) {
@@ -214,6 +178,8 @@ class ZS_Sync_Data_Importer {
 			});
 			$result = $this->process_database_records( $database_resources );
 
+			echo "Processed " . count($database_resources) . " database records and " . count($download_results) . " files.\n";
+
 			// Update stats
 			$stats['tables_processed'] += $result['tables_processed'];
 			$stats['rows_processed']   += $result['rows_processed'];
@@ -221,6 +187,15 @@ class ZS_Sync_Data_Importer {
 
 			if ( ! empty( $result['errors'] ) ) {
 				$stats['errors'] = array_merge( $stats['errors'], $result['errors'] );
+			}
+
+			// Set the next version from the last resource in the list
+			$last_resource = end( $resources_list );
+			if ( isset( $last_resource['time_of_last_scan'] ) && array_key_exists( 'hash_value', $last_resource ) ) {
+				$this->next_version = [
+					'time_of_last_scan' => $last_resource['time_of_last_scan'],
+					'hash_value'        => $last_resource['hash_value'],
+				];
 			}
 
 			// Determine if there's more to fetch
@@ -231,19 +206,48 @@ class ZS_Sync_Data_Importer {
 		return $stats;
 	}
 
+	private function fetch_files( $resources_list ) {
+		$file_resources = [];
+		foreach($resources_list as $resource) {
+			if (!isset($resource['type']) || $resource['type'] !== 'files') {
+				continue;
+			}
+			if($resource['is_directory']) {
+				if(null === $resource['hash_value']) {
+					rmdir($this->files_output_dir . '/' . $resource['file_path']);
+				} elseif(!is_dir($this->files_output_dir . '/' . $resource['file_path'])) {
+					mkdir($this->files_output_dir . '/' . $resource['file_path']);
+				}
+				continue;
+			}
+			if(null === $resource['hash_value']) {
+				$this->delete_file($resource['uri']);
+				continue;
+			}
+			$file_resources[] = $resource;
+		}
+		echo "Downloading " . count($file_resources) . " resources...\n";
+		
+		$downloader = new ZS_Sync_File_Downloader($this->client, [
+			'temp_dir' => __DIR__ . '/temp',
+			'chunk_size' => 1024 * 1024,
+			'target_dir' => $this->files_output_dir,
+		]);
+		
+		$download_results = $downloader->fetch_files($file_resources);
+		return $download_results;
+	}
+
 	/**
 	 * List resources from the server
 	 *
 	 * @return array|ZS_Sync_Response_Error List of resources or error
 	 */
 	private function list_resources() {
-		$request = new ZS_Sync_Resource_List_Request();
-
-		// If we have a next version, use it for pagination
-		if ( $this->next_version !== null ) {
-			$request->since_version = $this->next_version;
-		}
-
+		$request = ZS_Sync_Resource_List_Request::from_array([
+			'limit' => 100,
+			'since_version' => $this->next_version,
+		]);
 		return $this->client->list_resources( $request );
 	}
 
@@ -361,8 +365,6 @@ class ZS_Sync_Data_Importer {
 				VALUES (" . implode(', ', $row_data) . ")
 				ON DUPLICATE KEY UPDATE ";
 
-
-		
 		// Add the update part for each column
 		$updates = [];
 		foreach ($columns as $column) {
@@ -407,8 +409,6 @@ class ZS_Sync_Data_Importer {
 	private function delete_table_row( $table_name, $data ) {
 		// Delete all rows for this table
 		$table_identifier = ZS_Sync_MySQL_Helper::schema_object_name_for_query( $table_name );
-		// var_dump($data);
-		// die();
 		$stmt = $this->pdo->prepare("DELETE FROM $table_identifier");
 		$stmt->execute();
 	}

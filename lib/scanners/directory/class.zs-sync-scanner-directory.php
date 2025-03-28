@@ -73,6 +73,10 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 				continue;
 			}
 
+			if('' === $from_path ) {
+				$from_path = $this->visitor->get_relative_path();
+			}
+
 			$relative_path = $this->visitor->get_relative_path();
 			$file_hash     = hexdec( hash_file( 'crc32', $this->visitor->get_absolute_path() ) );
 			$file_size     = file_exists( $this->visitor->get_absolute_path() ) ? filesize( $this->visitor->get_absolute_path() ) : 0;
@@ -85,7 +89,6 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 		}
 		if( 0 === $processed) {
 			$this->is_finished = true;
-			$this->set_hash_to_null_for_deleted_files( $from_path );
 			return false;
 		}
 		$this->cursor['last_path'] = $this->visitor->get_relative_path();
@@ -133,44 +136,8 @@ class ZS_Sync_Scanner_Directory implements ZS_Sync_Scanner_Interface {
 
 			return false;
 		}
-		
-		// Set hash to null for any deleted files in the processed range
-		if (!empty($this->indexed_paths)) {
-			$this->set_hash_to_null_for_deleted_files( $from_path, $this->cursor['last_path'] );
-		}
 
 		return true;
-	}
-
-	private function set_hash_to_null_for_deleted_files( ?string $from_path, ?string $to_path = null): void {
-		global $wpdb;
-
-		$sql = "UPDATE {$wpdb->prefix}wp_sync_metadata__files 
-				SET hash_value = NULL 
-				WHERE hash_value IS NOT NULL";
-
-		$existing_paths_in_expression = [];
-		foreach (array_keys($this->indexed_paths) as $path) {
-			$existing_paths_in_expression[] = ZS_Sync_Mysql_Helper::string_to_safe_expression($path);
-		}
-		$existing_paths_in_expression = implode(", ", $existing_paths_in_expression);
-
-		if (!empty($existing_paths_in_expression)) {
-			$sql .= " AND file_path NOT IN ( $existing_paths_in_expression )";
-		}
-		
-		// Add range conditions for the current chunk
-		if ($from_path) {
-			$from_path_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($from_path);
-			$sql .= " AND file_path > $from_path_safe";
-		}
-		
-		if ($to_path) {
-			$to_path_safe = ZS_Sync_Mysql_Helper::string_to_safe_expression($to_path);
-			$sql .= " AND file_path <= $to_path_safe";
-		}
-
-		$wpdb->query($sql);
 	}
 
 	/**

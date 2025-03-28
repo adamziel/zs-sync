@@ -151,6 +151,8 @@ class ZS_Sync_Sorted_Directory_Visitor {
 				$entries[] = $entry;
 			}
 		}
+
+		sort($entries, SORT_STRING);
 		
 		return $entries;
 	}

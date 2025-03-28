@@ -109,7 +109,7 @@ require_once __DIR__ . '/lib/scanners/table/class.zs-sync-scanner-composite.php'
 require_once __DIR__ . '/lib/scanners/directory/class.zs-sync-directory-visitor.php';
 require_once __DIR__ . '/lib/scanners/directory/class.zs-sync-sorted-directory-visitor.php';
 require_once __DIR__ . '/lib/scanners/directory/class.zs-sync-scanner-directory.php';
-
+require_once __DIR__ . '/lib/scanners/directory/class.zs-sync-scanner-directory-deletions.php';
 // Continuous scanner
 require_once __DIR__ . '/lib/scanners/class.zs-sync-continuous-scanner.php';
 
@@ -128,3 +128,4 @@ require_once __DIR__ . '/lib/transport/interface.zs-sync-client.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-client.php';
 require_once __DIR__ . '/lib/client/class.zs-sync-file-downloader.php';
+

@@ -23,6 +23,11 @@ class ZS_Sync_Resource_Provider {
 	private $max_db_rows_per_response;
 
 	/**
+	 * @var string The root path for files
+	 */
+	private $root_path;
+
+	/**
 	 * Constructor.
 	 *
 	 * @since {WP_VERSION}
@@ -33,12 +38,14 @@ class ZS_Sync_Resource_Provider {
 	 *     @type int $max_file_chunk_size The size of file chunks to read, in bytes. Default 1MB.
 	 *     @type int $max_file_chunks_per_response The maximum number of files to include in a response. Default 100.
 	 *     @type int $max_db_rows_per_response The maximum number of database rows to include in a response. Default 1000.
+	 *     @type string $root_path The root path for files. Default WP_CONTENT_DIR.
 	 * }
 	 */
 	public function __construct( array $options = [] ) {
 		$this->max_file_chunk_size = $options['max_file_chunk_size'] ?? 1024 * 1024; // 1MB default
 		$this->max_file_chunks_per_response = $options['max_file_chunks_per_response'] ?? 5;
 		$this->max_db_rows_per_response = $options['max_db_rows_per_response'] ?? 1000;
+		$this->root_path = $options['root_path'] ?? WP_CONTENT_DIR;
 	}
 
 	public function list_resources( ZS_Sync_Resource_List_Request $request ) {
@@ -150,8 +157,7 @@ class ZS_Sync_Resource_Provider {
 					$resource_data['file_path'] = $item->primary_key;
 					$resource_data['filesize'] = (int) $item->filesize;
 					$resource_data['uri'] = ZS_Sync_URI::from_data( $item->table_type, 'path', $item->primary_key )->__toString();
-					// @TODO configurable root path
-					$resource_data['is_directory'] = is_dir(__DIR__ . '/../../tests/fixtures/' . $item->primary_key);
+					$resource_data['is_directory'] = is_dir(wp_join_paths($this->root_path, $item->primary_key));
 					break;
 			}
 
@@ -255,12 +261,12 @@ class ZS_Sync_Resource_Provider {
 					break;
 				case 'files':
 					if( $file_chunks >= $this->max_file_chunks_per_response ) {
+						// @TODO: Stop processing and return an error?
 						// continue 2;
 					}
 					$file_chunks++;
 
-					$root_path = __DIR__ . '/../../tests/fixtures/';
-					$file_path = $root_path . $zs_uri->id;
+					$file_path = wp_join_paths( $this->root_path, $zs_uri->id );
 										
 					// Confirm the file exists
 					if(!file_exists($file_path) || !is_file($file_path)) {
