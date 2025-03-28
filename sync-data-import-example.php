@@ -28,8 +28,8 @@ try {
 
 	// Configure the database connection
 	$pdo = new PDO('mysql:host=127.0.0.1', 'root', 'my-secret-pw');
-	$pdo->query("CREATE DATABASE IF NOT EXISTS zs_sync_target");
-	$pdo->query("USE zs_sync_target");
+	$pdo->query("CREATE DATABASE IF NOT EXISTS zs_new_sync_target");
+	$pdo->query("USE zs_new_sync_target");
 	$pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
 
     // Get last processed version from wp_options
@@ -37,7 +37,7 @@ try {
 
     // Configure import options
     $import_options = [
-        'files_output_dir' => __DIR__ . '/../sync-wp-content',
+        'files_output_dir' => __DIR__ . '/../sync-target/wp-content',
         'last_processed_version' => $last_processed_version,
 		'pdo' => $pdo,
     ];
