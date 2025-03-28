@@ -33,29 +33,22 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	 * @return array|WP_Error Array of resources on success, WP_Error on failure.
 	 */
 	public function list_resources( ZS_Sync_Resource_List_Request $request ): ZS_Sync_Response_Error|array {
+		// @TODO Use AsyncHttp\Client from the php-toolkit repo to remove curl dependency
+
 		$url = $this->base_url . '/list';
-		$response = wp_remote_post( $url, [
-			'method' => 'POST',
-			'headers' => [
-				'Content-Type' => 'application/json',
-			],
-			'body' => $request->to_json_string(),
-		] );
+		$response = $this->send_request( $url, 'POST', $request->to_json_string() );
 		
-		if ( is_wp_error( $response ) ) {
-			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $response->get_error_message() );
+		if ($response['curl_error']) {
+			return ZS_Sync_Response_Error::create(ZS_Sync_Response_Error::BAD_RESPONSE, $response['curl_error']);
 		}
 		
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body = wp_remote_retrieve_body( $response );
-		
-		if ( $status_code !== 200 ) {
-			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $body );
+		if ($response['status_code'] !== 200) {
+			return ZS_Sync_Response_Error::create(ZS_Sync_Response_Error::BAD_RESPONSE, $response['body']);
 		}
 		
-		$resources = json_decode( $body, true );
-		if ( json_last_error() !== JSON_ERROR_NONE ) {
-			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, 'Failed to decode JSON response: ' . json_last_error_msg() . '. Response: ' . $body );
+		$resources = json_decode($response['body'], true);
+		if (json_last_error() !== JSON_ERROR_NONE) {
+			return ZS_Sync_Response_Error::create(ZS_Sync_Response_Error::BAD_RESPONSE, 'Failed to decode JSON response: ' . json_last_error_msg() . '. Response: ' . $body);
 		}
 		
 		return $resources;
@@ -71,29 +64,39 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	 */
 	public function get_resources( ZS_Sync_Resource_Fetch_Request $request ): ZS_Sync_Response_Error|CBOR\MapObject {
 		$url = $this->base_url . '/fetch';
-		$response = wp_remote_post( $url, [
-			'method' => 'POST',
-			'headers' => [
-				'Content-Type' => 'application/json',
-			],
-			'body' => $request->to_json_string(),
-		] );
+		$response = $this->send_request( $url, 'POST', $request->to_json_string() );
 		
-		if ( is_wp_error( $response ) ) {
-			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $response->get_error_message() );
+		if ( $response['curl_error'] ) {
+			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $response['curl_error'] );
 		}
 		
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body = wp_remote_retrieve_body( $response );
-		
-		if ( $status_code !== 200 ) {
-			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $body );
+		if ( $response['status_code'] !== 200 ) {
+			return ZS_Sync_Response_Error::create( ZS_Sync_Response_Error::BAD_RESPONSE, $response['body'] );
 		}
 		
-		return ZS_Sync_Resource_Provider::parse_get_resources_response( $body );
+		return ZS_Sync_Resource_Provider::parse_get_resources_response( $response['body'] );
 	}
 
-	
+	private function send_request( $url, $method, $body ) {
+		$curl = curl_init();
+		curl_setopt_array($curl, [
+			CURLOPT_URL => $url,
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_POST => true,
+			CURLOPT_POSTFIELDS => $body,
+			CURLOPT_HTTPHEADER => [
+				'Content-Type: application/json',
+				'Content-Length: ' . strlen($body),
+			],
+		]);
+		$body = curl_exec($curl);
+		curl_close($curl);
+		return [
+			'body' => $body,
+			'status_code' => curl_getinfo($curl, CURLINFO_HTTP_CODE),
+			'curl_error' => curl_error($curl),
+		];
+	}
 	
 	/**
 	 * Process CBOR response into PHP objects.

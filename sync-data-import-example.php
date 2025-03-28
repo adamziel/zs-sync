@@ -1,13 +1,17 @@
 <?php
 
+/**
+ * This script intentionally has no dependency on WordPress.
+ * The initial sync can be performed even before the WordPress
+ * site is installed.
+ */
+
 use CBOR\ByteStringObject;
 use CBOR\OtherObject\NullObject;
 use CBOR\Tag\NegativeBigIntegerTag;
 use CBOR\Tag\UnsignedBigIntegerTag;
 use CBOR\UnsignedIntegerObject;
 use CBOR\TextStringObject;
-
-require __DIR__ . '/../wordpress-develop/src/wp-load.php';
 
 // Include required files for the ZS-Sync system
 require_once __DIR__ . '/load.php';
@@ -32,14 +36,19 @@ try {
 	$pdo->query("USE zs_new_sync_target");
 	$pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
 
+	$wp_options_table = 'wptests_options';
+
     // Get last processed version from wp_options
-    $last_processed_version = get_option('zs_sync_last_processed_version', null);
+    $stmt = $pdo->prepare("SELECT option_value FROM $wp_options_table WHERE option_name = ?");
+    $stmt->execute(['zs_sync_last_processed_version']);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $last_processed_version = $result ? json_decode($result['option_value'], true) : null;
 
     // Configure import options
     $import_options = [
         'files_output_dir' => __DIR__ . '/../sync-target/wp-content',
         'last_processed_version' => $last_processed_version,
-		'pdo' => $pdo,
+        'pdo' => $pdo,
     ];
 
     // Create the importer
@@ -49,10 +58,21 @@ try {
     echo "Starting import process...\n";
     do {
         $importer->import_step();
-		
-		// Store the updated last processed version in wp_options
-		$last_processed_version = $importer->get_last_processed_version();
-		update_option('zs_sync_last_processed_version', $last_processed_version);
+        
+        // Store the updated last processed version in wp_options
+        $last_processed_version = $importer->get_last_processed_version();
+        $serialized_version = json_encode($last_processed_version);
+        
+        // Check if option exists and update or insert accordingly
+        $check_stmt = $pdo->prepare("SELECT option_id FROM $wp_options_table WHERE option_name = ?");
+        $check_stmt->execute(['zs_sync_last_processed_version']);
+        if ($check_stmt->fetch()) {
+            $update_stmt = $pdo->prepare("UPDATE $wp_options_table SET option_value = ? WHERE option_name = ?");
+            $update_stmt->execute([$serialized_version, 'zs_sync_last_processed_version']);
+        } else {
+            $insert_stmt = $pdo->prepare("INSERT INTO $wp_options_table (option_name, option_value) VALUES (?, ?)");
+            $insert_stmt->execute(['zs_sync_last_processed_version', $serialized_version]);
+        }
 
 		// Display results
 		$stats = $importer->get_stats();
