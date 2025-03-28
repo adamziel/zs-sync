@@ -26,10 +26,20 @@ try {
     // Create client instance for the remote site
     $client = new ZS_Sync_Transport_Wordpress_Rest_Api_Client($remote_site_url);
 
+	// Configure the database connection
+	$pdo = new PDO('mysql:host=127.0.0.1', 'root', 'my-secret-pw');
+	$pdo->query("CREATE DATABASE IF NOT EXISTS zs_sync_target");
+	$pdo->query("USE zs_sync_target");
+	$pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
+
+    // Get last processed version from wp_options
+    $last_processed_version = get_option('zs_sync_last_processed_version', null);
+
     // Configure import options
     $import_options = [
-        'files_output_dir' => __DIR__ . '/../sync-wp-content',  // Where to save received files
-        'csv_output_dir' => __DIR__ . '/../sync-wp-content',     // Where to save CSV files
+        'files_output_dir' => __DIR__ . '/../sync-wp-content',
+        'last_processed_version' => $last_processed_version,
+		'pdo' => $pdo,
     ];
 
     // Create the importer
@@ -37,21 +47,28 @@ try {
 
     // Run the import process
     echo "Starting import process...\n";
-    $stats = $importer->import();
+    do {
+        $importer->import_step();
+		
+		// Store the updated last processed version in wp_options
+		$last_processed_version = $importer->get_last_processed_version();
+		update_option('zs_sync_last_processed_version', $last_processed_version);
 
-    // Display results
-    echo "\nImport completed:\n";
-    echo "- Tables processed: {$stats['tables_processed']}\n";
-    echo "- Rows processed: {$stats['rows_processed']}\n";
-    echo "- Files processed: {$stats['files_processed']}\n";
+		// Display results
+		$stats = $importer->get_stats();
+		echo "\nImport step:\n";
+		echo "- Tables processed: {$stats['tables_processed']}\n";
+		echo "- Rows processed: {$stats['rows_processed']}\n";
+		echo "- Files processed: {$stats['files_processed']}\n";
 
-    // Report any errors
-    if (count($stats['errors']) > 0) {
-        echo "\nErrors encountered during import:\n";
-        foreach ($stats['errors'] as $index => $error) {
-            echo ($index + 1) . ". $error\n";
-        }
-    }
+		// Report any errors
+		if (count($stats['errors']) > 0) {
+			echo "\nErrors encountered during import:\n";
+			foreach ($stats['errors'] as $index => $error) {
+				echo ($index + 1) . ". $error\n";
+			}
+		}
+	} while($importer->has_more());
 
 } catch (Exception $e) {
     echo "Error: " . $e->getMessage() . "\n";
@@ -77,12 +94,7 @@ class ZS_Sync_Data_Importer {
 	/**
 	 * @var string Output directory for received files
 	 */
-	private $files_output_dir = './received-files';
-
-	/**
-	 * @var string Output directory for CSV files
-	 */
-	private $csv_output_dir = './received-data';
+	private $files_output_dir;
 
 	/**
 	 * @var array Keeps track of the next resource list request version
@@ -91,6 +103,9 @@ class ZS_Sync_Data_Importer {
 
 	private $pdo;
 	private $existing_tables = [];
+
+	private $has_more = true;
+	private $stats;
 
 	/**
 	 * Constructor
@@ -103,10 +118,12 @@ class ZS_Sync_Data_Importer {
 
 		if ( isset( $options['files_output_dir'] ) ) {
 			$this->files_output_dir = $options['files_output_dir'];
+		} else {
+			throw new Exception('files_output_dir is required');
 		}
 
-		if ( isset( $options['csv_output_dir'] ) ) {
-			$this->csv_output_dir = $options['csv_output_dir'];
+		if(isset($options['last_processed_version'])) {
+			$this->last_processed_version = $options['last_processed_version'];
 		}
 
 		// Create output directories if they don't exist
@@ -114,14 +131,7 @@ class ZS_Sync_Data_Importer {
 			mkdir( $this->files_output_dir, 0755, true );
 		}
 
-		if ( ! file_exists( $this->csv_output_dir ) ) {
-			mkdir( $this->csv_output_dir, 0755, true );
-		}
-
-		$this->pdo = new PDO('mysql:host=127.0.0.1', 'root', 'my-secret-pw');
-		$this->pdo->query("CREATE DATABASE IF NOT EXISTS zs_sync_target");
-		$this->pdo->query("USE zs_sync_target");
-		$this->pdo->query("SET GLOBAL sql_mode='ALLOW_INVALID_DATES';");
+		$this->pdo = $options['pdo'];
 		$this->existing_tables = $this->pdo->query("SHOW TABLES")->fetchAll(PDO::FETCH_COLUMN);
 	}
 
@@ -130,70 +140,76 @@ class ZS_Sync_Data_Importer {
 	 *
 	 * @return array Statistics about the import process
 	 */
-	public function import() {
-		$stats = [
+	public function import_step() {
+		$this->stats = [
 			'tables_processed' => 0,
 			'rows_processed'   => 0,
 			'files_processed'  => 0,
 			'errors'           => [],
 		];
 
-		$page = 1;
-		do {
-			echo "Processing page $page...\n";
+		$resources_response = $this->list_resources($this->last_processed_version);
+		$resources_list = $resources_response['resources'];
+		$this->has_more = $resources_response['has_more'];
 
-			$resources_response = $this->list_resources($this->last_processed_version);
-			$resources_list = $resources_response['resources'];
-			$has_more = $resources_response['has_more'];
+		if ( $resources_list instanceof ZS_Sync_Response_Error ) {
+			$this->stats['errors'][] = 'Error listing resources: ' . $resources_list->message;
+			return false;
+		}
 
-			if ( $resources_list instanceof ZS_Sync_Response_Error ) {
-				$stats['errors'][] = 'Error listing resources: ' . $resources_list->message;
-				break;
+		if ( empty( $resources_list ) ) {
+			return false;
+		}
+
+		// Fetch the files first
+		$download_results = $this->fetch_files( $resources_list );
+		
+		// Log any download errors
+		foreach ($download_results as $uri => $result) {
+			if (!$result['success']) {
+				$this->stats['errors'][] = "Failed to download file {$uri}: " . $result['error'];
 			}
+		}
 
-			if ( empty( $resources_list ) ) {
-				break;
-			}
+		// The fetch the rest of the resources and process them
+		$database_resources = array_filter($resources_list, function($resource) {
+			return isset($resource['type']) && $resource['type'] !== 'files';
+		});
+		$result = $this->process_database_records( $database_resources );
 
-			// Fetch the files first
-			$download_results = $this->fetch_files( $resources_list );
-			
-			// Log any download errors
-			foreach ($download_results as $uri => $result) {
-				if (!$result['success']) {
-					$stats['errors'][] = "Failed to download file {$uri}: " . $result['error'];
-				}
-			}
+		echo "Processed " . count($database_resources) . " database records and " . count($download_results) . " files.\n";
 
-			// The fetch the rest of the resources and process them
-			$database_resources = array_filter($resources_list, function($resource) {
-				return isset($resource['type']) && $resource['type'] !== 'files';
-			});
-			$result = $this->process_database_records( $database_resources );
+		// Update stats
+		$this->stats['tables_processed'] += $result['tables_processed'];
+		$this->stats['rows_processed']   += $result['rows_processed'];
+		$this->stats['files_processed']  += $result['files_processed'];
 
-			echo "Processed " . count($database_resources) . " database records and " . count($download_results) . " files.\n";
+		if ( ! empty( $result['errors'] ) ) {
+			$this->stats['errors'] = array_merge( $this->stats['errors'], $result['errors'] );
+		}
 
-			// Update stats
-			$stats['tables_processed'] += $result['tables_processed'];
-			$stats['rows_processed']   += $result['rows_processed'];
-			$stats['files_processed']  += $result['files_processed'];
+		// Set the next version from the last resource in the list
+		$last_resource = end( $resources_list );
+		if ( isset( $last_resource['time_of_last_scan'] ) && array_key_exists( 'hash_value', $last_resource ) ) {
+			$this->last_processed_version = [
+				'time_of_last_scan' => $last_resource['time_of_last_scan'],
+				'hash_value'        => $last_resource['hash_value'],
+			];
+		}
 
-			if ( ! empty( $result['errors'] ) ) {
-				$stats['errors'] = array_merge( $stats['errors'], $result['errors'] );
-			}
+		return true;
+	}
 
-			// Set the next version from the last resource in the list
-			$last_resource = end( $resources_list );
-			if ( isset( $last_resource['time_of_last_scan'] ) && array_key_exists( 'hash_value', $last_resource ) ) {
-				$this->last_processed_version = [
-					'time_of_last_scan' => $last_resource['time_of_last_scan'],
-					'hash_value'        => $last_resource['hash_value'],
-				];
-			}
-			$page ++;
-		} while ( $has_more );
+	public function get_last_processed_version() {
+		return $this->last_processed_version;
+	}
 
-		return $stats;
+	public function get_stats() {
+		return $this->stats;
+	}
+
+	public function has_more() {
+		return $this->has_more;
 	}
 
 	private function fetch_files( $resources_list ) {

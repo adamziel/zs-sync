@@ -45,6 +45,13 @@ class ZS_Sync_Scanner_Bigint implements ZS_Sync_Scanner_Table_Type {
 		if ( $last_pk !== null ) {
 			$where = "$primary_key_identifier > " . (int) $last_pk;
 		}
+		// Special handling for wp_options table
+		if ($table_name === $wpdb->prefix . 'options') {
+			// Exclude blog URL, site URL, transients, and zs_sync options
+			$where .= " AND option_name NOT IN ('siteurl', 'home', 'blogname', 'blogdescription')";
+			$where .= " AND option_name NOT LIKE '%_transient_%'";
+			$where .= " AND option_name NOT LIKE 'zs_sync%'";
+		}
 
 		$select_query = "SELECT
 				$table_name_string AS scanned__table_name,
