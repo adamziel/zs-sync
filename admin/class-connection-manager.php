@@ -18,6 +18,7 @@ class Connection_Manager {
 	private const NONCE_ACTION_ENABLE_SYNC = 'zs_sync_enable_sync';
 	private const NONCE_ACTION_DISABLE_SYNC = 'zs_sync_disable_sync';
 	private const NONCE_ACTION_SYNC_NOW = 'zs_sync_now';
+	private const NONCE_ACTION_SCAN_NOW = 'zs_sync_scan_now';
 	private const TRANSIENT_PREFIX = 'zs_sync_connect_';
 	private const CONNECTIONS_OPTION_NAME = 'zs_sync_connections'; // Option to store connection details
 
@@ -31,6 +32,7 @@ class Connection_Manager {
 		add_action( 'admin_post_zs_enable_sync', [ $this, 'handle_enable_sync' ] );
 		add_action( 'admin_post_zs_disable_sync', [ $this, 'handle_disable_sync' ] );
 		add_action( 'admin_post_zs_sync_now', [ $this, 'handle_sync_now' ] );
+		add_action( 'admin_post_zs_scan_now', [ $this, 'handle_scan_now' ] );
 		add_action( 'admin_init', [ $this, 'handle_callback' ] );
 	}
 
@@ -114,6 +116,7 @@ class Connection_Manager {
 							<th scope="col"><?php echo esc_html__( 'Site URL', 'zs-sync' ); ?></th>
 							<th scope="col"><?php echo esc_html__( 'Role', 'zs-sync' ); ?></th>
 							<th scope="col"><?php echo esc_html__( 'Sync Status', 'zs-sync' ); ?></th>
+							<th scope="col"><?php echo esc_html__( 'Last Scan', 'zs-sync' ); ?></th>
 							<th scope="col"><?php echo esc_html__( 'Connected', 'zs-sync' ); ?></th>
 							<th scope="col"><?php echo esc_html__( 'Actions', 'zs-sync' ); ?></th>
 						</tr>
@@ -132,11 +135,16 @@ class Connection_Manager {
 								: __( 'Destination (Pushing to this site)', 'zs-sync' );
 
 							$status_label = $sync_enabled ? __( 'Enabled', 'zs-sync' ) : __( 'Disabled', 'zs-sync' );
+							
+							// Get last scan time
+							$last_scan_version = get_option( 'zs_sync_last_scan_time_' . md5($site_url), 0 );
+							$last_scan_date = $last_scan_version ? date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_scan_version ) : __( 'Never', 'zs-sync' );
 							?>
 							<tr>
 								<td><?php echo esc_html( $site_url ); ?></td>
 								<td><?php echo esc_html( $role_label ); ?></td>
 								<td><?php echo esc_html( $status_label ); ?></td>
+								<td><?php echo esc_html( $last_scan_date ); ?></td>
 								<td>
 									<?php echo esc_html( $connected_date ); ?><br>
 									<small><i><?php echo sprintf( /* translators: %s: User display name */ esc_html__( 'by %s', 'zs-sync' ), esc_html( $connected_by_name ) ); ?></i></small>
@@ -171,6 +179,16 @@ class Connection_Manager {
 											</form>
 											<?php
 										}
+									} else {
+										// This is a source site (we push to it), so add a "Scan Now" button
+										?>
+										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline; margin-right: 5px;">
+											<input type="hidden" name="action" value="zs_scan_now">
+											<input type="hidden" name="site_url" value="<?php echo esc_attr( $site_url ); ?>">
+											<?php wp_nonce_field( self::NONCE_ACTION_SCAN_NOW ); ?>
+											<?php submit_button( __( 'Scan Now', 'zs-sync' ), 'primary button-small', 'submit', false ); ?>
+										</form>
+										<?php
 									}
 									?>
 									<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
@@ -725,6 +743,121 @@ class Connection_Manager {
 					/* translators: 1: Site URL, 2: Error message */
 					__( 'Error syncing from %1$s: %2$s', 'zs-sync' ),
 					esc_html( $site_url ),
+					esc_html( $e->getMessage() )
+				),
+				'error'
+			);
+		}
+
+		$this->redirect_to_connections_page();
+	}
+
+	/**
+	 * Handle initiating a scan process manually.
+	 */
+	public function handle_scan_now() {
+		// Security checks
+		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_key( $_POST['_wpnonce'] ), self::NONCE_ACTION_SCAN_NOW ) ) {
+			wp_die( __( 'Security check failed.', 'zs-sync' ) );
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( __( 'You do not have permission to manage site connections.', 'zs-sync' ) );
+		}
+
+		// Get and validate site URL
+		$site_url = isset( $_POST['site_url'] ) ? esc_url_raw( wp_unslash( $_POST['site_url'] ) ) : '';
+		if ( ! $this->validate_site_url_parameter( $site_url ) ) {
+			$this->redirect_to_connections_page();
+		}
+
+		// Get current connections
+		$connections = get_option( self::CONNECTIONS_OPTION_NAME, [] );
+
+		// Check if the connection exists and this site is the source
+		// if ( ! isset( $connections[ $site_url ] ) || 'source' !== $connections[ $site_url ]['role'] ) {
+		// 	add_settings_error(
+		// 		'zs-sync-connections',
+		// 		'scan_not_enabled',
+		// 		__( 'Scan can only be performed for sites where this site is the source.', 'zs-sync' ),
+		// 		'error'
+		// 	);
+		// 	$this->redirect_to_connections_page();
+		// }
+
+		try {
+			// Get configuration
+			$chunk_size = get_option( 'zs_sync_scanning_chunk_size', 10 ); // Default: 10 items
+			
+			// Get all registered scanners
+			$scanners = apply_filters( 'zs_sync_registered_scanners', array() );
+			
+
+			// @TODO don't do complete scans, just one step. Also have a reusable list of scanners.
+			$directory_scanner = new \ZS_Sync_Scanner_Directory(WP_CONTENT_DIR);
+			while ($directory_scanner->next_chunk()) {
+				// ... twiddle our thumbs ...
+				// print_r($directory_scanner->get_cursor());
+			}
+
+			$directory_scanner = new \ZS_Sync_Scanner_Directory_Deletions(WP_CONTENT_DIR);
+			while ($directory_scanner->next_chunk()) {
+				// ... twiddle our thumbs ...
+				// print_r($directory_scanner->get_cursor());
+			}
+
+			$table_scanner = new \ZS_Sync_Scanner_Table();
+			while ($table_scanner->next_chunk()) {
+				// ... twiddle our thumbs ...
+				// print_r($table_scanner->get_cursor());
+			}
+
+			
+			$items_scanned = 0;
+			$scan_complete = true;
+			
+			// Process each scanner
+			foreach ( $scanners as $scanner ) {
+				$result = $scanner->next_chunk();
+				if ($result) {
+					$items_scanned += $result['count'] ?? 0;
+					if (isset($result['more_chunks']) && $result['more_chunks']) {
+						$scan_complete = false;
+					}
+				}
+			}
+			
+			// Update last scan time
+			update_option('zs_sync_last_scan_time_' . md5($site_url), time());
+			
+			// Add success message
+			add_settings_error(
+				'zs-sync-connections',
+				'scan_success',
+				sprintf(
+					/* translators: %d: Number of items scanned */
+					__( 'Scan completed. %d items processed.', 'zs-sync' ),
+					$items_scanned
+				),
+				'success'
+			);
+			
+			// If scan is not complete, add a notice
+			if (!$scan_complete) {
+				add_settings_error(
+					'zs-sync-connections',
+					'scan_more',
+					__( 'More items need to be scanned. Click "Scan Now" again to continue.', 'zs-sync' ),
+					'info'
+				);
+			}
+
+		} catch ( \Exception $e ) {
+			add_settings_error(
+				'zs-sync-connections',
+				'scan_failed',
+				sprintf(
+					/* translators: %s: Error message */
+					__( 'Error during scan: %s', 'zs-sync' ),
 					esc_html( $e->getMessage() )
 				),
 				'error'
