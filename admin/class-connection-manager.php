@@ -179,17 +179,16 @@ class Connection_Manager {
 											</form>
 											<?php
 										}
-									} else {
-										// This is a source site (we push to it), so add a "Scan Now" button
-										?>
-										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline; margin-right: 5px;">
-											<input type="hidden" name="action" value="zs_scan_now">
-											<input type="hidden" name="site_url" value="<?php echo esc_attr( $site_url ); ?>">
-											<?php wp_nonce_field( self::NONCE_ACTION_SCAN_NOW ); ?>
-											<?php submit_button( __( 'Scan Now', 'zs-sync' ), 'primary button-small', 'submit', false ); ?>
-										</form>
-										<?php
 									}
+								
+									?>
+									<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline; margin-right: 5px;">
+										<input type="hidden" name="action" value="zs_scan_now">
+										<input type="hidden" name="site_url" value="<?php echo esc_attr( $site_url ); ?>">
+										<?php wp_nonce_field( self::NONCE_ACTION_SCAN_NOW ); ?>
+										<?php submit_button( __( 'Scan Now', 'zs-sync' ), 'primary button-small', 'submit', false ); ?>
+									</form>
+									<?php
 									?>
 									<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
 										<input type="hidden" name="action" value="zs_revoke_connection">
