@@ -13,15 +13,22 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 	private $base_url;
 
 	/**
+	 * @var array The connection credentials for this site.
+	 */
+	private $credentials;
+
+	/**
 	 * Constructor.
 	 *
 	 * @since {WP_VERSION}
 	 *
 	 * @param string $base_url The base URL of the remote WordPress site.
+	 * @param array  $credentials The connection credentials for this site.
 	 */
-	public function __construct( $base_url ) {
+	public function __construct( $base_url, $credentials ) {
 		// Ensure the base URL ends with a slash
 		$this->base_url = rtrim( $base_url, '/' );
+		$this->credentials = $credentials;
 	}
 
 	/**
@@ -48,7 +55,7 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 		
 		$resources = json_decode($response['body'], true);
 		if (json_last_error() !== JSON_ERROR_NONE) {
-			return ZS_Sync_Response_Error::create(ZS_Sync_Response_Error::BAD_RESPONSE, 'Failed to decode JSON response: ' . json_last_error_msg() . '. Response: ' . $body);
+			return ZS_Sync_Response_Error::create(ZS_Sync_Response_Error::BAD_RESPONSE, 'Failed to decode JSON response: ' . json_last_error_msg() . '. Response: ' . $response['body']);
 		}
 		
 		return $resources;
@@ -87,14 +94,19 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Client implements ZS_Sync_Client {
 			CURLOPT_HTTPHEADER => [
 				'Content-Type: application/json',
 				'Content-Length: ' . strlen($body),
+				'Authorization: Basic ' . base64_encode($this->credentials['password']),
+				'X-ZS-Sync-Source: ' . home_url(),
+				'X-ZS-Sync-UUID: ' . $this->credentials['uuid'],
 			],
 		]);
 		$body = curl_exec($curl);
+		$status_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+		$curl_error = curl_error($curl);
 		curl_close($curl);
 		return [
 			'body' => $body,
-			'status_code' => curl_getinfo($curl, CURLINFO_HTTP_CODE),
-			'curl_error' => curl_error($curl),
+			'status_code' => $status_code,
+			'curl_error' => $curl_error,
 		];
 	}
 	

@@ -9,9 +9,6 @@
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-// Core WordPress polyfills and helpers
-require_once __DIR__ . '/tests/wordpress-polyfills.php';
-
 
 /**
  * Joins multiple path segments together into a single path.
@@ -90,6 +87,8 @@ function wp_canonicalize_path( $path ) {
 	return $result === '' ? '/' : $result;
 }
 
+require_once __DIR__ . '/lib/class.zs-sync-data-importer.php';
+
 // MySQL Helpers
 require_once __DIR__ . '/lib/class.zs-sync-mysql-helper.php';
 
@@ -128,4 +127,22 @@ require_once __DIR__ . '/lib/transport/interface.zs-sync-client.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-endpoint.php';
 require_once __DIR__ . '/lib/transport/wp-rest-api/class.zs-sync-transport-wordpress-rest-api-client.php';
 require_once __DIR__ . '/lib/client/class.zs-sync-file-downloader.php';
+require_once __DIR__ . '/register-cron.php';
+
+// Admin Connection Manager
+if ( is_admin() ) { // Only load admin features in the WordPress admin area
+	require_once __DIR__ . '/admin/class-connection-manager.php';
+	( new Automattic\Syndication\Admin\Connection_Manager() )->init();
+}
+
+// Admin Authorization Handler
+if ( is_admin() ) {
+	require_once __DIR__ . '/includes/class-admin-authorization-handler.php';
+	( new Automattic\Syndication\Includes\Admin_Authorization_Handler() )->init();
+}
+
+
+// REST API Endpoints
+require_once __DIR__ . '/includes/class-rest-api-endpoints.php';
+( new Automattic\Syndication\Includes\Rest_Api_Endpoints() )->init();
 

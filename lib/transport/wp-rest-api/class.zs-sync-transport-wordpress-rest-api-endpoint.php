@@ -1,5 +1,6 @@
 <?php
 
+
 /**
  * ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint class.
  *
@@ -65,8 +66,67 @@ class ZS_Sync_Transport_Wordpress_Rest_Api_Endpoint {
 	 * @return bool|WP_Error True if the request has permission, WP_Error otherwise.
 	 */
 	public function check_permission( $request ) {
-		// For now, allow all requests
-		// @TODO: Secure site<->site authorization
+		// Get the authorization header
+		$auth_header = $request->get_header( 'Authorization' );
+		if ( ! $auth_header || ! preg_match( '/^Basic (.+)$/', $auth_header, $matches ) ) {
+			return new WP_Error(
+				'rest_forbidden',
+				__( 'Missing or invalid authorization header.', 'zs-sync' ),
+				array( 'status' => 401 )
+			);
+		}
+
+		// Decode the credentials
+		$credentials = base64_decode( $matches[1] );
+		list( $username, $password ) = explode( ':', $credentials, 2 );
+
+		// Get the source site and UUID from headers
+		$source_site = $request->get_header( 'X-ZS-Sync-Source' );
+		$uuid = $request->get_header( 'X-ZS-Sync-UUID' );
+
+		if ( ! $source_site || ! $uuid ) {
+			return new WP_Error(
+				'rest_forbidden',
+				__( 'Missing required headers.', 'zs-sync' ),
+				array( 'status' => 401 )
+			);
+		}
+
+		// Get stored connections
+		$connections = get_option( 'zs_sync_connections', array() );
+
+		// Check if this connection exists and is valid
+		if ( ! isset( $connections[ $source_site ] ) ) {
+			return new WP_Error(
+				'rest_forbidden',
+				__( 'Connection not found.', 'zs-sync' ),
+				array( 'status' => 401 )
+			);
+		}
+
+		$connection = $connections[ $source_site ];
+
+		// @TODO: Verify connection credentials. They don't
+		//        seem to be stored right now.
+		// // Verify the UUID matches
+		// if ( $connection['credentials']['uuid'] !== $uuid ) {
+		// 	return new WP_Error(
+		// 		'rest_forbidden',
+		// 		__( 'Invalid connection UUID.', 'zs-sync' ),
+		// 		array( 'status' => 401 )
+		// 	);
+		// }
+
+		// // Verify the credentials match
+		// if ( $connection['credentials']['username'] !== $username || 
+		// 	 $connection['credentials']['password'] !== $password ) {
+		// 	return new WP_Error(
+		// 		'rest_forbidden',
+		// 		__( 'Invalid credentials.', 'zs-sync' ),
+		// 		array( 'status' => 401 )
+		// 	);
+		// }
+
 		return true;
 	}
 
